@@ -1,0 +1,203 @@
+# 文件名: main.py
+# 用途: 程序主入口文件，运行武将对决模拟并生成战斗报告
+"""三国武将对决模拟入口"""
+
+import argparse
+import random
+import secrets
+import sys
+from pathlib import Path
+from typing import Optional
+
+from src import SKILL_REGISTRY, Warrior, BattleEngine, get_skill
+from src.battle_report import AggregateReporter, BattleReporter
+from src.event_exporter import build_battle_document, write_battle_json, write_battle_js
+from src.seed_history import SeedHistory, SeedRecord
+
+# 双方武将的默认配置
+DEFAULT_WARRIORS = {
+    "a": {
+        "name": "马超",
+        "martialarts": 98,
+        "agility": 95,
+        "strength": 92,
+        "courage": 94,
+        "sp": 98,
+        "skill": "none",
+    },
+    "b": {
+        "name": "许褚",
+        "martialarts": 95,
+        "agility": 80,
+        "strength": 99,
+        "courage": 96,
+        "sp": 100,
+        "skill": "opening_ap_50",
+    },
+}
+
+SKILL_CHOICES = ["none", *sorted(SKILL_REGISTRY)]
+
+STAT_FIELDS = ("martialarts", "agility", "strength", "courage", "sp")
+
+STAT_LABELS = {
+    "martialarts": "武艺",
+    "agility": "敏捷",
+    "strength": "力量",
+    "courage": "胆气",
+    "sp": "体力",
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """构建命令行参数解析器"""
+    parser = argparse.ArgumentParser(description="三国武将对决模拟")
+    parser.add_argument("-n", "--battles", type=int, default=1, help="模拟场次（默认 1）")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "随机种子；设置后第 i 场使用 seed + i。"
+            "默认每场自动生成种子并记入 data/seed_history.json，可凭记录复现"
+        ),
+    )
+    parser.add_argument(
+        "--export-json",
+        metavar="路径",
+        default=None,
+        help="把结构化战斗事件写入指定 JSON 文件（仅支持单场）",
+    )
+    parser.add_argument(
+        "--export-web",
+        action="store_true",
+        help="导出到 web/data/battle.json 与 battle-data.js（仅支持单场）",
+    )
+
+    for side, defaults in DEFAULT_WARRIORS.items():
+        prefix = side.upper()
+        parser.add_argument(
+            f"--{side}-name", default=defaults["name"], help=f"{prefix}队武将名"
+        )
+        for field in STAT_FIELDS:
+            parser.add_argument(
+                f"--{side}-{field}",
+                type=int,
+                default=defaults[field],
+                help=f"{prefix}队 {STAT_LABELS[field]}（默认 {defaults[field]}）",
+            )
+        parser.add_argument(
+            f"--{side}-skill",
+            default=defaults["skill"],
+            choices=SKILL_CHOICES,
+            help=f"{prefix}队特技（默认 {defaults['skill']}；none 表示不装备）",
+        )
+
+    return parser
+
+
+def create_warrior(args: argparse.Namespace, side: str) -> Warrior:
+    """根据命令行参数创建武将并装备指定特技"""
+    warrior = Warrior(
+        getattr(args, f"{side}_name"),
+        side.upper(),
+        **{field: getattr(args, f"{side}_{field}") for field in STAT_FIELDS},
+    )
+    skill_id = getattr(args, f"{side}_skill")
+    if skill_id and skill_id != "none":
+        warrior.equip_skill(get_skill(skill_id))
+    return warrior
+
+
+def apply_seed(seed: Optional[int], battle_index: int) -> int:
+    """为第 battle_index 场战斗设置随机种子，返回本次实际使用的种子
+
+    指定 seed 时按场次派生（seed + battle_index），使同一 seed 下前 k 场的结果
+    与 -n k 完全一致；未指定 seed 时生成一次性随机种子并立即应用，
+    使该场战斗同样可以凭种子历史中的记录复现。
+    """
+    resolved = seed + battle_index if seed is not None else secrets.randbits(32)
+    random.seed(resolved)
+    return resolved
+
+
+def main() -> None:
+    """运行单挑模拟"""
+    # Windows 默认 GBK 无法输出 ▶⚔☠ 等符号，统一使用 UTF-8
+    # 必须在解析参数前设置，否则 -h 帮助信息仍会使用 GBK
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.battles < 1:
+        parser.error("--battles 必须大于等于 1")
+    if (args.export_json or args.export_web) and args.battles != 1:
+        parser.error("导出结构化事件仅支持单场战斗（--battles 1）")
+
+    print(f"三国武将对决系统 - {args.battles}场单挑模拟")
+    print("=" * 70)
+    if args.seed is not None:
+        print(f"随机种子: {args.seed}")
+
+    # 每场战斗都需要全新的武将实例，先保存初始快照用于汇总战报
+    original_a = create_warrior(args, "a")
+    original_b = create_warrior(args, "b")
+    snapshot_a = original_a.snapshot()
+    snapshot_b = original_b.snapshot()
+
+    if args.battles == 1:
+        # 单场战报
+        battle_seed = apply_seed(args.seed, 0)
+        if args.seed is None:
+            print(f"随机种子: {battle_seed}")
+        reporter = BattleReporter([original_a], [original_b])
+        engine = BattleEngine([original_a], [original_b])
+        result = engine.run()
+        print(reporter.generate_full_report(result))
+
+        history = SeedHistory()
+        history.append(SeedRecord.from_result(battle_seed, result))
+        history.save()
+
+        if args.export_json or args.export_web:
+            document = build_battle_document(
+                result, [snapshot_a], [snapshot_b], seed=battle_seed
+            )
+            if args.export_json:
+                path = write_battle_json(document, Path(args.export_json))
+                print(f"\n已导出结构化事件: {path}")
+            if args.export_web:
+                web_data = Path(__file__).resolve().parent / "web" / "data"
+                json_path = write_battle_json(document, web_data / "battle.json")
+                js_path = write_battle_js(document, web_data / "battle-data.js")
+                print(f"已导出网页数据: {json_path}")
+                print(f"已导出 file:// 兜底数据: {js_path}")
+        print(f"\n种子历史已更新: {history.path}（保留最近 {history.limit} 条）")
+        return
+
+    # 多场汇总战报
+    print("模拟进行中...")
+    reporter = AggregateReporter(original_a.name, original_b.name)
+    history = SeedHistory()
+
+    for i in range(args.battles):
+        battle_seed = apply_seed(args.seed, i)
+        engine = BattleEngine([create_warrior(args, "a")], [create_warrior(args, "b")])
+        result = engine.run()
+        reporter.add_battle_result(result)
+        history.append(SeedRecord.from_result(battle_seed, result))
+
+        if (i + 1) % 10 == 0:
+            print(f"  已完成 {i + 1}/{args.battles} 场...")
+
+    history.save()
+
+    print()
+    print(reporter.generate_aggregate_report([snapshot_a], [snapshot_b]))
+    print(f"\n种子历史已更新: {history.path}（保留最近 {history.limit} 条）")
+
+
+if __name__ == "__main__":
+    main()

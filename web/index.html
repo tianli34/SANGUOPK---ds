@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>三国武将单挑 · 马战可视化</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="hud" id="hud">
+      <section class="fighter fighter--a" id="fighter-A">
+        <div class="portrait" id="portrait-A"></div>
+        <div class="fighter-body">
+          <div class="fighter-head">
+            <span class="team-badge">A</span>
+            <h1 class="fighter-name" id="name-A">—</h1>
+            <span class="fighter-skill" id="skill-A"></span>
+          </div>
+          <div class="gauge gauge--hp" id="hp-gauge-A">
+            <span class="gauge-tag">HP</span>
+            <div class="gauge-track">
+              <div class="gauge-fill"></div>
+              <div class="gauge-gloss"></div>
+            </div>
+            <span class="gauge-value" id="hp-value-A">0</span>
+          </div>
+          <div class="gauge gauge--sp" id="sp-gauge-A">
+            <span class="gauge-tag">SP</span>
+            <div class="gauge-track">
+              <div class="gauge-fill"></div>
+              <div class="gauge-gloss"></div>
+            </div>
+            <span class="gauge-value" id="sp-value-A">0</span>
+          </div>
+          <div class="courage-row">
+            <span class="courage-label">胆气</span>
+            <span class="courage-value" id="courage-A">0</span>
+            <span class="courage-caption" id="courage-caption-A"></span>
+          </div>
+        </div>
+      </section>
+
+      <div class="hud-center">
+        <div class="round-label" id="round-label">第 1 回合</div>
+        <div class="vs-mark"><span>决</span></div>
+        <div class="tick-label" id="tick-label">tick 0</div>
+      </div>
+
+      <section class="fighter fighter--b" id="fighter-B">
+        <div class="portrait" id="portrait-B"></div>
+        <div class="fighter-body">
+          <div class="fighter-head">
+            <span class="team-badge">B</span>
+            <h1 class="fighter-name" id="name-B">—</h1>
+            <span class="fighter-skill" id="skill-B"></span>
+          </div>
+          <div class="gauge gauge--hp" id="hp-gauge-B">
+            <span class="gauge-tag">HP</span>
+            <div class="gauge-track">
+              <div class="gauge-fill"></div>
+              <div class="gauge-gloss"></div>
+            </div>
+            <span class="gauge-value" id="hp-value-B">0</span>
+          </div>
+          <div class="gauge gauge--sp" id="sp-gauge-B">
+            <span class="gauge-tag">SP</span>
+            <div class="gauge-track">
+              <div class="gauge-fill"></div>
+              <div class="gauge-gloss"></div>
+            </div>
+            <span class="gauge-value" id="sp-value-B">0</span>
+          </div>
+          <div class="courage-row">
+            <span class="courage-label">胆气</span>
+            <span class="courage-value" id="courage-B">0</span>
+            <span class="courage-caption" id="courage-caption-B"></span>
+          </div>
+        </div>
+      </section>
+    </header>
+
+    <div class="lead-strip">
+      <div class="lead-item" id="hp-lead">HP 领先 —</div>
+      <div class="lead-item" id="sp-lead">SP 领先 —</div>
+    </div>
+
+    <div class="arena">
+      <main class="stage" id="stage">
+        <div class="sky"></div>
+        <div class="sun"></div>
+        <div class="cloud cloud--1"></div>
+        <div class="cloud cloud--2"></div>
+        <div class="mountains mountains--far"></div>
+        <div class="mountains mountains--near"></div>
+        <div class="ground">
+          <div class="ground-lines"></div>
+        </div>
+        <div class="dust" id="dust"></div>
+
+        <div class="fx-layer" id="fx-layer"></div>
+
+        <div class="unit unit--A" id="unit-A">
+          <div class="unit-shadow"></div>
+          <div class="unit-inner"><div class="mirror" id="mirror-A"></div></div>
+        </div>
+        <div class="unit unit--B" id="unit-B">
+          <div class="unit-shadow"></div>
+          <div class="unit-inner"><div class="mirror" id="mirror-B"></div></div>
+        </div>
+
+        <div class="float-layer" id="float-layer"></div>
+
+        <div class="defense-banner" id="defense-banner" hidden>
+          <span class="def-word" id="def-word"></span>
+          <span class="def-result" id="def-result"></span>
+        </div>
+
+        <div class="clash-banner" id="clash-banner" hidden>拼刀</div>
+
+        <div class="action-banner" id="action-banner">
+          <span class="action-round" id="action-round">第 1 回合</span>
+          <span class="action-divider"></span>
+          <span class="action-text" id="action-text">战斗即将开始</span>
+        </div>
+
+        <div class="result-overlay" id="result-overlay" hidden>
+          <div class="result-card">
+            <p class="result-kicker">战 斗 结 束</p>
+            <h2 class="result-title" id="result-title">—</h2>
+            <p class="result-sub" id="result-sub"></p>
+            <div class="result-stats" id="result-stats"></div>
+            <button class="btn primary" id="btn-result-replay" type="button">重新播放</button>
+          </div>
+        </div>
+
+        <div class="empty-state" id="empty-state" hidden>
+          <h2>没有找到战斗数据</h2>
+          <p>在项目根目录运行：</p>
+          <code>python main.py --seed 89 --export-web</code>
+          <p>或通过本地服务器打开本页：</p>
+          <code>python -m http.server 8000</code>
+          <p class="empty-note">然后访问 http://localhost:8000/web/</p>
+        </div>
+      </main>
+
+      <aside class="log-panel" id="log-panel">
+        <div class="log-head">
+          <span class="log-title">战报</span>
+          <span class="log-note" id="log-note">按事件回放 · 可前后拖动</span>
+          <button class="btn-ghost" id="btn-log-toggle" type="button">收起</button>
+        </div>
+        <ol class="log-list" id="log-list"></ol>
+        <div class="lead-report" id="lead-report" hidden>
+          <div class="lead-report-title">领先记录</div>
+          <div class="lead-report-grid" id="lead-report-grid"></div>
+        </div>
+      </aside>
+
+      <section class="bottom">
+        <div class="controls">
+          <button class="btn primary" id="btn-start" type="button">开始</button>
+          <button class="btn" id="btn-pause" type="button">暂停</button>
+          <div class="speed-group" role="group" aria-label="播放速度">
+            <button class="speed-btn is-active" data-speed="1" type="button">1×</button>
+            <button class="speed-btn" data-speed="2" type="button">2×</button>
+            <button class="speed-btn" data-speed="4" type="button">4×</button>
+          </div>
+          <button class="btn" id="btn-prev" type="button">上一步</button>
+          <button class="btn" id="btn-replay" type="button">重新播放</button>
+          <button class="btn" id="btn-end" type="button">跳到结果</button>
+          <div class="event-counter" id="event-counter">0 / 0</div>
+        </div>
+
+        <div class="progress-row">
+          <input type="range" id="progress" min="0" max="0" value="0" step="1" aria-label="战斗事件进度" />
+          <span class="progress-hint" id="progress-hint">可拖动定位任意事件</span>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="data/battle-data.js" onerror="window.__battleDataMissing = true"></script>
+  <script src="js/warrior-art.js"></script>
+  <script src="js/scene.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
