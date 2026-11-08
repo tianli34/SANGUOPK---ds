@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from src import SKILL_REGISTRY, Warrior, BattleEngine, get_skill
+from src import SKILL_REGISTRY, WEAPON_REGISTRY, Warrior, BattleEngine, get_skill, get_weapon
 from src.battle_report import AggregateReporter, BattleReporter
 from src.event_exporter import build_battle_document, write_battle_json, write_battle_js
 from src.seed_history import SeedHistory, SeedRecord
@@ -18,25 +18,28 @@ from src.seed_history import SeedHistory, SeedRecord
 DEFAULT_WARRIORS = {
     "a": {
         "name": "马超",
-        "martialarts": 98,
-        "agility": 95,
-        "strength": 92,
-        "courage": 94,
-        "sp": 98,
+        "martialarts": 96,
+        "agility": 98,
+        "strength": 91,
+        "courage": 90,
+        "sp": 95,
         "skill": "none",
+        "weapon": "虎头湛金枪",
     },
     "b": {
         "name": "许褚",
-        "martialarts": 95,
-        "agility": 80,
+        "martialarts": 91,
+        "agility": 88,
         "strength": 99,
-        "courage": 96,
-        "sp": 100,
-        "skill": "opening_ap_50",
+        "courage": 91,
+        "sp": 99,
+        "skill": "none",
+        "weapon": "血煞虎头刀",
     },
 }
 
 SKILL_CHOICES = ["none", *sorted(SKILL_REGISTRY)]
+WEAPON_CHOICES = ["none", *sorted(WEAPON_REGISTRY)]
 
 STAT_FIELDS = ("martialarts", "agility", "strength", "courage", "sp")
 
@@ -92,16 +95,27 @@ def build_parser() -> argparse.ArgumentParser:
             choices=SKILL_CHOICES,
             help=f"{prefix}队特技（默认 {defaults['skill']}；none 表示不装备）",
         )
+        parser.add_argument(
+            f"--{side}-weapon",
+            default=defaults["weapon"],
+            choices=WEAPON_CHOICES,
+            help=f"{prefix}队兵器（默认 {defaults['weapon']}；none 表示不装备）",
+        )
 
     return parser
 
 
 def create_warrior(args: argparse.Namespace, side: str) -> Warrior:
-    """根据命令行参数创建武将并装备指定特技"""
+    """根据命令行参数创建武将并装备指定特技、兵器"""
+    weapon_name = getattr(args, f"{side}_weapon")
+    weapon = None
+    if weapon_name and weapon_name != "none":
+        weapon = get_weapon(weapon_name)
     warrior = Warrior(
         getattr(args, f"{side}_name"),
         side.upper(),
         **{field: getattr(args, f"{side}_{field}") for field in STAT_FIELDS},
+        weapon=weapon,
     )
     skill_id = getattr(args, f"{side}_skill")
     if skill_id and skill_id != "none":

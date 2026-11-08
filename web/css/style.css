@@ -188,6 +188,15 @@ body {
   text-overflow: ellipsis;
 }
 
+.fighter-weapon {
+  font-size: 11px;
+  color: rgba(232, 205, 150, 0.78);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .gauge {
   --gauge-color: var(--hp);
   --flash-color: rgba(216, 183, 108, 0.85);

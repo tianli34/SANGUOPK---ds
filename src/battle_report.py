@@ -27,6 +27,8 @@ def format_warrior_initial_stats(snapshot: WarriorSnapshot) -> str:
         f"    计算属性: 攻击力={snapshot.attack_power:.1f} 防御力={snapshot.defense_power:.1f} "
         f"攻速={snapshot.attack_speed:.1f}"
     )
+    if snapshot.weapon_name:
+        text += f"\n    兵器: {snapshot.weapon_name} · {snapshot.weapon_category_label}"
     if snapshot.skills:
         text += f"\n    特技: {'；'.join(snapshot.skills)}"
     return text

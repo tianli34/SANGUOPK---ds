@@ -354,8 +354,8 @@ class BattleEngine:
         target_courage_before = target.courage
         target_ap_percent = target.ap_percent  # 记录防守方AP百分比
 
-        # 防守方选择防御方式
-        defense_type = target.choose_defense()
+        # 防守方选择防御方式（兵器规则会限制可选方式）
+        defense_type = target.choose_defense(attacker)
         base_damage = calculate_final_damage(attacker, target)
 
         # 计算防御成功率

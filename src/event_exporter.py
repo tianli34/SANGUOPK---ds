@@ -45,6 +45,15 @@ def _snapshot_warrior(snapshot: WarriorSnapshot, side: str) -> dict:
             "sp": round(snapshot.sp_real / 50),
         },
         "skills": list(snapshot.skills),
+        "weapon": (
+            {
+                "name": snapshot.weapon_name,
+                "category": snapshot.weapon_category,
+                "categoryLabel": snapshot.weapon_category_label,
+            }
+            if snapshot.weapon_name
+            else None
+        ),
     }
 
 

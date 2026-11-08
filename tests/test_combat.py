@@ -18,9 +18,12 @@ from src import (
     BattleOutcome,
     DefenseType,
     Warrior,
+    Weapon,
+    WeaponCategory,
     calculate_base_damage,
     check_clash_condition,
     get_skill,
+    get_weapon,
 )
 import src.defense as defense_module
 from src.battle_report import BattleReporter
@@ -141,6 +144,152 @@ class DefenseTest(unittest.TestCase):
 
         # 整次攻击只结算一次，而不是每次读取 +1
         self.assertEqual(defender.ap_bonus_count, 1)
+
+
+class WeaponTest(unittest.TestCase):
+    def test_default_roster_equips_weapons(self):
+        from main import build_parser, create_warrior
+
+        args = build_parser().parse_args([])
+        ma_chao = create_warrior(args, "a")
+        xu_chu = create_warrior(args, "b")
+
+        self.assertEqual(ma_chao.weapon.name, "虎头湛金枪")
+        self.assertIs(ma_chao.weapon.category, WeaponCategory.SPEAR)
+        self.assertEqual(ma_chao.weapon.category.value, 1)
+
+        self.assertEqual(xu_chu.weapon.name, "血煞虎头刀")
+        self.assertIs(xu_chu.weapon.category, WeaponCategory.HEAVY)
+        self.assertEqual(xu_chu.weapon.category.value, 4)
+
+        snapshot = ma_chao.snapshot()
+        self.assertEqual(snapshot.weapon_name, "虎头湛金枪")
+        self.assertEqual(snapshot.weapon_category, 1)
+        self.assertEqual(snapshot.weapon_category_label, "枪与矛（刺击类）")
+
+    def test_category_one_cannot_block(self):
+        spear = get_weapon("虎头湛金枪")
+        defender = make_warrior("马超", "A", weapon=spear)
+        attackers = [
+            make_warrior("无兵器", "B"),
+            make_warrior("许褚", "B", weapon=get_weapon("血煞虎头刀")),
+            make_warrior(
+                "刀客", "B", weapon=Weapon("测试长刀", WeaponCategory.GREAT_BLADE)
+            ),
+            make_warrior(
+                "戟客", "B", weapon=Weapon("测试戟", WeaponCategory.HALBERD)
+            ),
+        ]
+
+        for attacker in attackers:
+            self.assertFalse(defender.can_use_defense(DefenseType.BLOCK, attacker))
+            for _ in range(100):
+                self.assertIsNot(
+                    defender.choose_defense(attacker), DefenseType.BLOCK
+                )
+
+    def test_category_four_cannot_block_category_one_only(self):
+        heavy = get_weapon("血煞虎头刀")
+        defender = make_warrior("许褚", "B", weapon=heavy)
+        spear_attacker = make_warrior(
+            "马超", "A", weapon=get_weapon("虎头湛金枪")
+        )
+
+        self.assertFalse(
+            defender.can_use_defense(DefenseType.BLOCK, spear_attacker)
+        )
+        for _ in range(200):
+            self.assertIsNot(
+                defender.choose_defense(spear_attacker), DefenseType.BLOCK
+            )
+
+        for category in (
+            WeaponCategory.GREAT_BLADE,
+            WeaponCategory.HALBERD,
+            WeaponCategory.HEAVY,
+        ):
+            attacker = make_warrior("对手", "A", weapon=Weapon("测试兵器", category))
+            self.assertTrue(defender.can_use_defense(DefenseType.BLOCK, attacker))
+
+        blade_attacker = make_warrior(
+            "刀客", "A", weapon=Weapon("测试长刀", WeaponCategory.GREAT_BLADE)
+        )
+        choices = {
+            defender.choose_defense(blade_attacker) for _ in range(200)
+        }
+        self.assertIn(DefenseType.BLOCK, choices)
+
+    def test_warrior_without_weapon_is_unrestricted(self):
+        defender = make_warrior("无兵器", "A")
+        attacker = make_warrior(
+            "马超", "B", weapon=get_weapon("虎头湛金枪")
+        )
+
+        self.assertTrue(
+            defender.can_use_defense(DefenseType.BLOCK, attacker)
+        )
+
+    def test_battle_logs_respect_block_restrictions(self):
+        random.seed(42)
+        warrior_a = make_warrior(
+            "马超",
+            "A",
+            martialarts=98,
+            agility=95,
+            strength=92,
+            courage=94,
+            sp=98,
+            weapon=get_weapon("虎头湛金枪"),
+        )
+        warrior_b = make_warrior(
+            "许褚",
+            "B",
+            martialarts=95,
+            agility=80,
+            strength=99,
+            courage=96,
+            sp=100,
+            weapon=get_weapon("血煞虎头刀"),
+        )
+
+        result = BattleEngine([warrior_a], [warrior_b]).run()
+        attack_logs = [log for log in result.logs if log.event_type == "attack"]
+        self.assertTrue(attack_logs)
+
+        for log in attack_logs:
+            details = log.details
+            if details["defender"] == "马超":
+                self.assertNotEqual(details["defense"], "block")
+            if details["defender"] == "许褚" and details["attacker"] == "马超":
+                self.assertNotEqual(details["defense"], "block")
+
+    def test_report_and_export_include_weapon(self):
+        random.seed(7)
+        warrior_a = make_warrior(
+            "马超", "A", weapon=get_weapon("虎头湛金枪")
+        )
+        warrior_b = make_warrior(
+            "许褚", "B", weapon=get_weapon("血煞虎头刀")
+        )
+        snapshot_a = warrior_a.snapshot()
+        snapshot_b = warrior_b.snapshot()
+        reporter = BattleReporter([warrior_a], [warrior_b])
+
+        result = BattleEngine([warrior_a], [warrior_b]).run()
+        report = reporter.generate_full_report(result)
+        self.assertIn("兵器: 虎头湛金枪 · 枪与矛（刺击类）", report)
+        self.assertIn("兵器: 血煞虎头刀 · 大斧与长柄锤（重型破甲类）", report)
+
+        document = build_battle_document(result, [snapshot_a], [snapshot_b])
+        self.assertEqual(
+            document["warriors"]["A"]["weapon"],
+            {
+                "name": "虎头湛金枪",
+                "category": 1,
+                "categoryLabel": "枪与矛（刺击类）",
+            },
+        )
+        self.assertEqual(document["warriors"]["B"]["weapon"]["category"], 4)
 
 
 class ClashTest(unittest.TestCase):

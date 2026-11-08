@@ -4,7 +4,7 @@
 import math
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from src.constants import (
     WINDUP_BAR,
@@ -16,9 +16,11 @@ from src.constants import (
     ATTACKER_BACKSWING_LOSS_RATIO,
 )
 from src.enums import DefenseType, AttackPhase
+from src.weapons import is_defense_forbidden
 
 if TYPE_CHECKING:
     from src.skills import Skill
+    from src.weapons import Weapon
 
 
 @dataclass
@@ -48,6 +50,10 @@ class WarriorSnapshot:
     ap: float
     # 已装备特技（名称+效果描述）
     skills: tuple = ()
+    # 兵器
+    weapon_name: str = ""
+    weapon_category: Optional[int] = None
+    weapon_category_label: str = ""
 
 
 class Warrior:
@@ -62,9 +68,11 @@ class Warrior:
         strength: int = 50,
         courage: int = 50,
         sp: int = 50,
+        weapon: Optional["Weapon"] = None,
     ):
         self.name = name
         self.team = team
+        self.weapon = weapon
 
         # 初始化武将的运行时状态
         self.init_sp = sp  # 初始体力
@@ -86,7 +94,7 @@ class Warrior:
         self.martialarts_init = max(1, martialarts)  # 武艺，最小值为1
         self.agility_init = max(1, agility)  # 初始敏捷，最小值为1
         self.strength_init = max(1, strength)  # 初始力量，最小值为1
-        self.courage = max(1, courage)  # 胆气，最小值为1
+        self.courage = max(1, min(COURAGE_CAP, courage))  # 胆气，限制在 1~上限之间
 
     def snapshot(self) -> WarriorSnapshot:
         """获取武将当前状态快照"""
@@ -110,6 +118,9 @@ class Warrior:
             attack_phase=self.attack_phase,
             ap=self.ap,
             skills=self.skill_descriptions,
+            weapon_name=self.weapon.name if self.weapon else "",
+            weapon_category=self.weapon.category.value if self.weapon else None,
+            weapon_category_label=self.weapon.category_label if self.weapon else "",
         )
     
     @property
@@ -204,6 +215,11 @@ class Warrior:
         """特技展示文本，用于战报初始属性"""
         return tuple(f"{s.name}（{s.description}）" for s in self.skills)
 
+    @property
+    def weapon_description(self) -> str:
+        """兵器展示文本（兵器名 + 分类）"""
+        return self.weapon.description if self.weapon else ""
+
     def can_attack(self) -> bool:
         """检查是否可以发起攻击（前摇阶段且达到前摇阈值）"""
         return (
@@ -268,15 +284,30 @@ class Warrior:
         """在限制范围内修改胆气"""
         self.courage = max(1, min(COURAGE_CAP, self.courage + amount))
 
-    def choose_defense(self) -> DefenseType:
-        """AI根据加权属性选择防御类型"""
+    def can_use_defense(
+        self, defense_type: DefenseType, attacker: Optional["Warrior"] = None
+    ) -> bool:
+        """当前兵器对阵下是否允许使用某种防御方式"""
+        attacker_weapon = attacker.weapon if attacker is not None else None
+        return not is_defense_forbidden(self.weapon, attacker_weapon, defense_type)
+
+    def choose_defense(self, attacker: Optional["Warrior"] = None) -> DefenseType:
+        """AI根据加权属性选择防御类型，并排除兵器规则禁止的防御方式"""
 
         weights = {
             DefenseType.BLOCK: self.strength * 0.6 + self.sp_percent * 100 * 0.4,
             DefenseType.PARRY: self.martialarts * 0.7 + self.agility * 0.3,
-            DefenseType.DODGE: self.agility * 0.7 + self.martialarts * 0.2 + abs(self.courage - 80) * 0.2,
-            DefenseType.COUNTER: (self.courage * 0.7 + self.martialarts * 0.3) * (1 - self.hp_percent),
+            DefenseType.DODGE: self.agility * 0.8 + abs(self.courage - 80) * 0.2,
+            DefenseType.COUNTER: (self.courage * 0.7 + self.strength * 0.3) * (1 - self.hp_percent),
         }
+
+        weights = {
+            defense_type: weight
+            for defense_type, weight in weights.items()
+            if self.can_use_defense(defense_type, attacker)
+        }
+        if not weights:
+            return DefenseType.PARRY
 
         total = sum(weights.values())
         roll = random.uniform(0, total)
@@ -287,7 +318,7 @@ class Warrior:
             if roll <= cumulative:
                 return defense_type
 
-        return DefenseType.BLOCK
+        return DefenseType.PARRY
 
     def __repr__(self) -> str:
         return f"Warrior({self.name}, HP={self.hp:.0f}, SP={self.sp:.0f}, AP={self.ap:.0f})"

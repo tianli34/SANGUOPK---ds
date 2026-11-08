@@ -15,7 +15,7 @@
     dodge: "dodging",
     counter: "countering",
   };
-  const DEFENSE_VERB = { block: "格挡", parry: "卸力", dodge: "闪避", counter: "反击" };
+  const DEFENSE_VERB = { block: "格挡", parry: "招架", dodge: "闪避", counter: "反击" };
 
   class Scene {
     constructor() {

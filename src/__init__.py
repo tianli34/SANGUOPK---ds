@@ -7,6 +7,13 @@ from src.defense import DefenseResult, process_defense
 from src.damage import calculate_base_damage, calculate_final_damage
 from src.clash import process_clash, check_clash_condition
 from src.skills import Skill, SkillEffect, OpeningApBoost, SKILL_REGISTRY, get_skill
+from src.weapons import (
+    Weapon,
+    WeaponCategory,
+    WEAPON_REGISTRY,
+    get_weapon,
+    is_defense_forbidden,
+)
 from src.enums import DefenseType
 from src.constants import (
     BACKSWING_BAR,
@@ -36,6 +43,11 @@ __all__ = [
     "OpeningApBoost",
     "SKILL_REGISTRY",
     "get_skill",
+    "Weapon",
+    "WeaponCategory",
+    "WEAPON_REGISTRY",
+    "get_weapon",
+    "is_defense_forbidden",
     "BACKSWING_BAR",
     "TICK_RATE",
     "CLASH_AP_THRESHOLD",

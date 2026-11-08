@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 ALL_DEFENSE_TYPES = ["block", "parry", "dodge", "counter"]
 
 # 防御类型中文映射 (View层可能用到，但定义在这里方便统一)
-DEFENSE_TYPE_CN = {"block": "格挡", "parry": "卸力", "dodge": "闪避", "counter": "反击"}
+DEFENSE_TYPE_CN = {"block": "格挡", "parry": "招架", "dodge": "闪避", "counter": "反击"}
 
 
 @dataclass

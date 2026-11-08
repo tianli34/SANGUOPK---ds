@@ -38,7 +38,6 @@ MAX_TICKS = 30000  # 最大时间刻度（防止无限循环）
 # 防御参数
 DEFENSE_PARAMS = {
     "block": {  # 格挡
-        "base_rate": 0.70,  # 基础成功率
         "rate_factor": 0.01,  # 属性差异系数
         "impact_k": 0.5,  # 冲击力系数
         "success_damage_mult": 0.3,  # 成功伤害倍率
@@ -48,31 +47,28 @@ DEFENSE_PARAMS = {
         "success_courage": 10,  # 成功胆气变化
         "fail_courage": -30,  # 失败胆气变化
     },
-    "parry": {  # 卸力
-        "base_rate": 0.50,  # 基础成功率
+    "parry": {  # 招架
         "rate_factor": 0.01,  # 属性差异系数
         "success_sp_cost": 10,  # 成功体力消耗
         "success_courage": 20,  # 成功胆气变化
         "fail_sp_cost": 20,  # 失败体力消耗
-        "fail_courage": -10,  # 失败胆气变化
+        "fail_courage": -20,  # 失败胆气变化
         "fail_damage_mult": 1.0,  # 失败伤害倍率
     },
     "dodge": {  # 闪避
-        "base_rate": 0.1,  # 基础成功率
         "rate_factor": 0.01,  # 属性差异系数
         "success_sp_cost": 20,  # 成功体力消耗
         "success_courage": 30,  # 成功胆气变化
         "fail_sp_cost": 40,  # 失败体力消耗
-        "fail_courage": -15,  # 失败胆气变化
+        "fail_courage": -10,  # 失败胆气变化
         "fail_damage_mult": 1.2,  # 失败伤害倍率
     },
     "counter": {  # 反击
-        "base_rate": 0.60,  # 基础成功率
         "rate_factor": 0.01,  # 属性差异系数
         "success_sp_cost": 30,  # 成功体力消耗
         "success_courage": 40,  # 成功胆气变化
         "fail_sp_cost": 50,  # 失败体力消耗
         "fail_courage": 0,  # 失败胆气变化
-        "fail_damage_mult": 0.8,  # 失败伤害倍率
+        "fail_damage_mult": 1.5,  # 失败伤害倍率
     },
 }

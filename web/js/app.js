@@ -85,6 +85,16 @@
         } else {
           skillEl.hidden = true;
         }
+
+        const weaponEl = $("weapon-" + side);
+        const weapon = warrior.weapon;
+        if (weapon && weapon.name) {
+          weaponEl.textContent = `兵器 · ${weapon.name}`;
+          weaponEl.title = weapon.categoryLabel || "";
+          weaponEl.hidden = false;
+        } else {
+          weaponEl.hidden = true;
+        }
       });
 
       this.apply(initialState(doc), { instant: true });
