@@ -7,6 +7,7 @@ from typing import List, Optional
 from enum import Enum
 
 from src.constants import TICK_RATE, MAX_ROUNDS, MAX_TICKS
+from src.map import BattleMap, chebyshev_distance
 from src.warrior import Warrior
 from src.defense import process_defense
 from src.damage import calculate_final_damage
@@ -49,15 +50,22 @@ class BattleResult:
     team_b: List[Warrior] = field(default_factory=list)  # B队所有武将
     sp_leader_changes: List[tuple] = field(default_factory=list)  # 体力领先者变更历史 [(round_num, leader)]
     leader_history: List[dict] = field(default_factory=list)  # 每回合 HP/SP 领先快照
+    battle_map: Optional[BattleMap] = None  # 本场使用的地图（无地图战斗为 None）
 
 
 class BattleEngine:
     """运行武将对决模拟的主要战斗引擎"""
 
-    def __init__(self, team_a: List[Warrior], team_b: List[Warrior]):
+    def __init__(
+        self,
+        team_a: List[Warrior],
+        team_b: List[Warrior],
+        battle_map: Optional[BattleMap] = None,
+    ):
         self.team_a = team_a
         self.team_b = team_b
         self.all_warriors = team_a + team_b
+        self.battle_map = battle_map  # 不传地图时行为与纯数值模拟完全一致
 
         self.tick_count = 0  # 时间刻度计数器
         self.round_count = 0  # 回合计数器
@@ -81,8 +89,9 @@ class BattleEngine:
 
     def _capture_warrior_states(self) -> list:
         """记录当前全体武将的数值快照，供战报与网页演出重建状态"""
-        return [
-            {
+        states = []
+        for w in self.all_warriors:
+            entry = {
                 "name": w.name,
                 "team": w.team,
                 "hp": w.hp,
@@ -93,8 +102,10 @@ class BattleEngine:
                 "ap": w.ap,
                 "alive": w.is_alive,
             }
-            for w in self.all_warriors
-        ]
+            if self.battle_map is not None:
+                entry["position"] = list(w.position) if w.position is not None else None
+            states.append(entry)
+        return states
 
     def _log(self, event_type: str, description: str, **details) -> None:
         """添加日志条目"""
@@ -393,6 +404,12 @@ class BattleEngine:
         self.last_any_attack_tick = self.tick_count
 
         # 记录攻击日志（包含详细状态变化）
+        range_details = {}
+        if self.battle_map is not None:
+            range_details = {
+                "attack_distance": chebyshev_distance(attacker.position, target.position),
+                "attacker_reach": attacker.reach,
+            }
         self._log(
             "attack",
             f"{attacker.name} 攻击 {target.name}，{target.name} 选择 {defense_type.value}",
@@ -426,6 +443,7 @@ class BattleEngine:
             target_courage_after=target.courage,
             target_alive=target.is_alive,
             attacker_alive=attacker.is_alive,
+            **range_details,
         )
 
         # 攻击完成，进入后摇阶段
@@ -491,11 +509,64 @@ class BattleEngine:
             self.round_count += 1
             self.attack_count = 0
 
+    def _deploy(self) -> None:
+        """布阵：双方依次落在出生点（多武将时落在最近空闲格）"""
+        for team, side in ((self.team_a, "A"), (self.team_b, "B")):
+            occupied = {w.position for w in self.all_warriors if w.position is not None}
+            for warrior in team:
+                cell = self.battle_map.nearest_free(self.battle_map.spawn(side), occupied)
+                warrior.position = cell
+                occupied.add(cell)
+
+    def _can_reach(self, attacker: Warrior, target: Warrior) -> bool:
+        """目标是否在射程内且视线通畅"""
+        return (
+            chebyshev_distance(attacker.position, target.position) <= attacker.reach
+            and self.battle_map.has_line_of_sight(attacker.position, target.position)
+        )
+
+    def _update_movement(self) -> None:
+        """移动阶段：推进在途移动；射程外且不在后摇的武将向目标寻路接近"""
+        if self.battle_map is None:
+            return
+        for warrior in self._get_all_alive():
+            if warrior.is_in_backswing():
+                continue  # 后摇期间锁定站位
+            occupied = {
+                w.position for w in self._get_all_alive() if w is not warrior
+            }
+            if warrior.is_moving:
+                if warrior.move_path[0] in occupied:
+                    warrior.stop_move()  # 目标占路，停下重新规划
+                    continue
+                before = warrior.position
+                advanced = warrior.tick_move(TICK_RATE)
+                if advanced is not None:
+                    self._log(
+                        "move",
+                        f"{warrior.name} 移动 ({before[0]},{before[1]}) → "
+                        f"({advanced[0]},{advanced[1]})",
+                        warrior=warrior.name,
+                        **{"from": list(before), "to": list(advanced)},
+                    )
+                continue
+            target = self._find_target(warrior)
+            if target is None or self._can_reach(warrior, target):
+                continue
+            path = self.battle_map.find_path_to_range(
+                warrior.position, target.position, warrior.reach, occupied=occupied
+            )
+            if path:
+                warrior.begin_move(path)
+
     def run_tick(self) -> Optional[BattleResult]:
         """运行战斗的一个时间刻度"""
         self.tick_count += 1
 
-        # 为所有存活武将累积行动点数
+        # 移动阶段（无地图时为空操作）
+        self._update_movement()
+
+        # 为所有存活武将累积行动点数（移动中的武将内部跳过）
         for warrior in self._get_all_alive():
             warrior.tick_ap(TICK_RATE)
 
@@ -504,8 +575,15 @@ class BattleEngine:
             if warrior.check_backswing_complete():
                 warrior.finish_backswing()
 
-        # 获取准备攻击的武将（前摇完成的）
+        # 获取准备攻击的武将（前摇完成的），有地图时还需目标在射程内
         ready = [w for w in self._get_all_alive() if w.can_attack()]
+        if self.battle_map is not None:
+            ready = [
+                w
+                for w in ready
+                if (target := self._find_target(w)) is not None
+                and self._can_reach(w, target)
+            ]
 
         if len(ready) >= 2 and check_clash_condition(ready):
             # 拼刀！
@@ -529,6 +607,8 @@ class BattleEngine:
 
     def run(self) -> BattleResult:
         """运行完整战斗直到结束"""
+        if self.battle_map is not None:
+            self._deploy()
         self._log("battle_start", "战斗开始！")
         self.round_count = 1
         self._apply_battle_start_skills()
@@ -537,4 +617,5 @@ class BattleEngine:
             result = self.run_tick()
             if result:
                 self._record_final_leadership()
+                result.battle_map = self.battle_map
                 return result

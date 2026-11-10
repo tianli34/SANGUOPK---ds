@@ -18,3 +18,10 @@ class AttackPhase(Enum):
     WINDUP = "windup"  # 前摇阶段
     ATTACK = "attack"  # 攻击阶段（瞬时）
     BACKSWING = "backswing"  # 后摇阶段
+
+
+class Terrain(Enum):
+    """地形类型"""
+
+    PLAIN = "plain"  # 平地（可通行）
+    ROCK = "rock"  # 岩石（不可通行，阻挡视线）

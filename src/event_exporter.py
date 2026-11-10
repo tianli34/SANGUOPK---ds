@@ -27,8 +27,17 @@ OUTCOME_CN = {
 }
 
 
-def _snapshot_warrior(snapshot: WarriorSnapshot, side: str) -> dict:
+def _snapshot_warrior(snapshot: WarriorSnapshot, side: str, with_reach: bool = False) -> dict:
     """战前快照 → 网页初始武将数据"""
+    weapon = None
+    if snapshot.weapon_name:
+        weapon = {
+            "name": snapshot.weapon_name,
+            "category": snapshot.weapon_category,
+            "categoryLabel": snapshot.weapon_category_label,
+        }
+        if with_reach:
+            weapon["reach"] = snapshot.reach
     return {
         "name": snapshot.name,
         "team": side,
@@ -45,15 +54,7 @@ def _snapshot_warrior(snapshot: WarriorSnapshot, side: str) -> dict:
             "sp": round(snapshot.sp_real / 50),
         },
         "skills": list(snapshot.skills),
-        "weapon": (
-            {
-                "name": snapshot.weapon_name,
-                "category": snapshot.weapon_category,
-                "categoryLabel": snapshot.weapon_category_label,
-            }
-            if snapshot.weapon_name
-            else None
-        ),
+        "weapon": weapon,
     }
 
 
@@ -81,6 +82,8 @@ def _state_from_log(log, side_by_name: dict) -> dict:
             "courage": entry["courage"],
             "alive": entry["alive"],
         }
+        if entry.get("position") is not None:
+            state[side]["position"] = entry["position"]
     return state
 
 
@@ -130,11 +133,15 @@ def build_battle_document(
     snapshot_a = snapshots_a[0]
     snapshot_b = snapshots_b[0]
     side_by_name = {snapshot_a.name: "A", snapshot_b.name: "B"}
+    battle_map = result.battle_map
 
     initial_state = {
         "A": _snapshot_state(snapshot_a, "A"),
         "B": _snapshot_state(snapshot_b, "B"),
     }
+    if battle_map is not None:
+        initial_state["A"]["position"] = list(battle_map.spawn("A"))
+        initial_state["B"]["position"] = list(battle_map.spawn("B"))
     previous = initial_state
 
     events: list = []
@@ -198,6 +205,14 @@ def build_battle_document(
             }
         elif log.event_type == "sp_leader_change":
             event["leader"] = details.get("leader")
+        elif log.event_type == "move":
+            mover = details.get("warrior")
+            event["move"] = {
+                "warrior": mover,
+                "side": side_by_name.get(mover),
+                "from": details.get("from"),
+                "to": details.get("to"),
+            }
 
         events.append(event)
         previous = after
@@ -222,9 +237,9 @@ def build_battle_document(
         for metric, section in lead_records.items()
     }
 
-    return {
+    document = {
         "meta": {
-            "version": 1,
+            "version": 2 if battle_map is not None else 1,
             "generatedAt": datetime.now().isoformat(timespec="seconds"),
             "seed": seed,
             "source": "src.battle_engine",
@@ -242,11 +257,14 @@ def build_battle_document(
             "leadRecords": lead_document,
         },
         "warriors": {
-            "A": _snapshot_warrior(snapshot_a, "A"),
-            "B": _snapshot_warrior(snapshot_b, "B"),
+            "A": _snapshot_warrior(snapshot_a, "A", with_reach=battle_map is not None),
+            "B": _snapshot_warrior(snapshot_b, "B", with_reach=battle_map is not None),
         },
         "events": events,
     }
+    if battle_map is not None:
+        document["map"] = battle_map.to_dict()
+    return document
 
 
 def write_battle_json(document: dict, path: Path) -> Path:

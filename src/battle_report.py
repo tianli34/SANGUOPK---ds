@@ -28,7 +28,10 @@ def format_warrior_initial_stats(snapshot: WarriorSnapshot) -> str:
         f"攻速={snapshot.attack_speed:.1f}"
     )
     if snapshot.weapon_name:
-        text += f"\n    兵器: {snapshot.weapon_name} · {snapshot.weapon_category_label}"
+        text += (
+            f"\n    兵器: {snapshot.weapon_name} · {snapshot.weapon_category_label}"
+            f" · 射程 {snapshot.reach} 格"
+        )
     if snapshot.skills:
         text += f"\n    特技: {'；'.join(snapshot.skills)}"
     return text
@@ -100,6 +103,8 @@ class BattleReporter:
                 lines.append(self._format_attack_log(log))
             elif log.event_type == "clash":
                 lines.append(self._format_clash_log(log))
+            elif log.event_type == "move":
+                lines.append(f"    ➤ {log.description}")
 
         return "\n".join(lines)
 
@@ -161,6 +166,11 @@ class BattleReporter:
             lines.append(f"    距上次攻击间隔: {global_interval_seconds:.2f}秒 ({global_attack_interval_ticks}tick)")
         
         lines.append(f"    防御方式: {defense_cn}")
+        attack_distance = details.get("attack_distance")
+        if attack_distance is not None:
+            lines.append(
+                f"    攻击距离: {attack_distance} 格（射程 {details.get('attacker_reach')} 格）"
+            )
         if defender_ap_percent is not None:
             lines.append(f"    防守方AP: {defender_ap_percent * 100:.1f}%")
         if defense_rate is not None:

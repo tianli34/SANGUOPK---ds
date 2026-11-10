@@ -3,13 +3,17 @@
 """三国武将对决模拟入口"""
 
 import argparse
+import json
 import random
 import secrets
 import sys
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
-from src import SKILL_REGISTRY, WEAPON_REGISTRY, Warrior, BattleEngine, get_skill, get_weapon
+from src import SKILL_REGISTRY, WEAPON_REGISTRY, Warrior, BattleEngine, get_skill, get_weapon, get_default_map
 from src.battle_report import AggregateReporter, BattleReporter
 from src.event_exporter import build_battle_document, write_battle_json, write_battle_js
 from src.seed_history import SeedHistory, SeedRecord
@@ -76,6 +80,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="导出到 web/data/battle.json 与 battle-data.js（仅支持单场）",
     )
+    parser.add_argument(
+        "--serve-web",
+        action="store_true",
+        help="启动本地网页服务，页面可实时生成新战局（支持 --host / --port）",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="本地网页服务监听地址（默认 127.0.0.1，仅本机可访问）",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="本地网页服务端口（默认 8000）",
+    )
 
     for side, defaults in DEFAULT_WARRIORS.items():
         prefix = side.upper()
@@ -135,6 +155,67 @@ def apply_seed(seed: Optional[int], battle_index: int) -> int:
     return resolved
 
 
+def build_random_document(args: argparse.Namespace) -> dict:
+    """用随机种子现场模拟一场新战斗，返回网页可直接播放的事件文档"""
+    seed = secrets.randbits(32)
+    random.seed(seed)
+    warrior_a = create_warrior(args, "a")
+    warrior_b = create_warrior(args, "b")
+    snapshot_a = warrior_a.snapshot()
+    snapshot_b = warrior_b.snapshot()
+    result = BattleEngine([warrior_a], [warrior_b], battle_map=get_default_map()).run()
+    return build_battle_document(result, [snapshot_a], [snapshot_b], seed=seed)
+
+
+def serve_web(args: argparse.Namespace) -> None:
+    """本地网页服务：静态页面 + /api/battle 动态生成新战局"""
+    web_dir = Path(__file__).resolve().parent / "web"
+    if not (web_dir / "index.html").exists():
+        print(f"未找到网页目录: {web_dir}", file=sys.stderr)
+        return
+
+    class Handler(SimpleHTTPRequestHandler):
+        def do_GET(self) -> None:
+            path = urlsplit(self.path).path
+            if path == "/api/health":
+                self._send_json({"ok": True})
+                return
+            if path == "/api/battle":
+                try:
+                    document = build_random_document(args)
+                except Exception as error:  # noqa: BLE001 - HTTP 边界统一转成错误响应
+                    self._send_json({"error": str(error)}, status=500)
+                    return
+                self._send_json(document)
+                return
+            super().do_GET()
+
+        def _send_json(self, payload: dict, status: int = 200) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+    handler = partial(Handler, directory=str(web_dir))
+    try:
+        server = HTTPServer((args.host, args.port), handler)
+    except OSError as error:
+        print(f"无法启动本地服务: {error}", file=sys.stderr)
+        return
+
+    print(f"网页服务已启动: http://{args.host}:{args.port}/")
+    print("点击「新的一局」会实时生成一场新战斗；按 Ctrl+C 停止。")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n本地服务已停止。")
+    finally:
+        server.server_close()
+
+
 def main() -> None:
     """运行单挑模拟"""
     # Windows 默认 GBK 无法输出 ▶⚔☠ 等符号，统一使用 UTF-8
@@ -149,6 +230,11 @@ def main() -> None:
         parser.error("--battles 必须大于等于 1")
     if (args.export_json or args.export_web) and args.battles != 1:
         parser.error("导出结构化事件仅支持单场战斗（--battles 1）")
+    if args.serve_web:
+        if args.export_json or args.export_web:
+            parser.error("--serve-web 不能与导出参数同时使用")
+        serve_web(args)
+        return
 
     print(f"三国武将对决系统 - {args.battles}场单挑模拟")
     print("=" * 70)
@@ -167,7 +253,7 @@ def main() -> None:
         if args.seed is None:
             print(f"随机种子: {battle_seed}")
         reporter = BattleReporter([original_a], [original_b])
-        engine = BattleEngine([original_a], [original_b])
+        engine = BattleEngine([original_a], [original_b], battle_map=get_default_map())
         result = engine.run()
         print(reporter.generate_full_report(result))
 
@@ -198,7 +284,11 @@ def main() -> None:
 
     for i in range(args.battles):
         battle_seed = apply_seed(args.seed, i)
-        engine = BattleEngine([create_warrior(args, "a")], [create_warrior(args, "b")])
+        engine = BattleEngine(
+            [create_warrior(args, "a")],
+            [create_warrior(args, "b")],
+            battle_map=get_default_map(),
+        )
         result = engine.run()
         reporter.add_battle_result(result)
         history.append(SeedRecord.from_result(battle_seed, result))

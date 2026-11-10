@@ -631,5 +631,24 @@ class CliSeedTest(unittest.TestCase):
         self.assertEqual(first.stdout, second.stdout)
 
 
+class WebBattleApiTest(unittest.TestCase):
+    def test_random_document_is_playable(self):
+        import main
+
+        args = main.build_parser().parse_args([])
+        state = random.getstate()
+        try:
+            document = main.build_random_document(args)
+        finally:
+            random.setstate(state)
+
+        self.assertIsInstance(document["meta"]["seed"], int)
+        self.assertTrue(document["events"])
+        self.assertTrue(document["events"][0]["state"])
+        self.assertIn("A", document["warriors"])
+        self.assertIn("B", document["warriors"])
+        self.assertGreaterEqual(document["battle"]["rounds"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

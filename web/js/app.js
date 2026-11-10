@@ -33,6 +33,8 @@
     log: null,
     scene: null,
     lastRound: null,
+    canNewBattle: false,
+    newBattlePending: false,
   };
 
   const els = {
@@ -55,11 +57,12 @@
     resultSub: $("result-sub"),
     resultStats: $("result-stats"),
     emptyState: $("empty-state"),
-    btnStart: $("btn-start"),
-    btnPause: $("btn-pause"),
+    btnPlay: $("btn-play"),
+    btnNew: $("btn-new"),
     btnPrev: $("btn-prev"),
     btnReplay: $("btn-replay"),
     btnEnd: $("btn-end"),
+    btnResultNew: $("btn-result-new"),
   };
 
   /* ================= 顶部状态面板 ================= */
@@ -69,8 +72,17 @@
       this.doc = doc;
       this.warriors = doc.warriors;
       this.prevTier = { A: { hp: null, sp: null }, B: { hp: null, sp: null } };
+      if (this.courageTimers) {
+        ["A", "B"].forEach((side) => window.clearTimeout(this.courageTimers[side]));
+      }
       this.courageTimers = { A: null, B: null };
       this.leaderText = { hp: null, sp: null };
+
+      ["A", "B"].forEach((side) => {
+        const caption = $("courage-caption-" + side);
+        caption.textContent = "";
+        caption.classList.remove("is-up", "is-down");
+      });
 
       ["A", "B"].forEach((side) => {
         const warrior = doc.warriors[side];
@@ -90,7 +102,9 @@
         const weapon = warrior.weapon;
         if (weapon && weapon.name) {
           weaponEl.textContent = `兵器 · ${weapon.name}`;
-          weaponEl.title = weapon.categoryLabel || "";
+          weaponEl.title = weapon.reach
+            ? `${weapon.categoryLabel || ""} · 射程 ${weapon.reach} 格`
+            : weapon.categoryLabel || "";
           weaponEl.hidden = false;
         } else {
           weaponEl.hidden = true;
@@ -215,13 +229,15 @@
   function initialState(doc) {
     const make = (side) => {
       const warrior = doc.warriors[side];
-      return {
+      const state = {
         name: warrior.name,
         hp: warrior.hp,
         sp: warrior.sp,
         courage: warrior.courage,
         alive: true,
       };
+      if (doc.map) state.position = doc.map.spawns[side];
+      return state;
     };
     return { A: make("A"), B: make("B") };
   }
@@ -348,6 +364,11 @@
           `<span class="log-clash">⚔ 拼刀</span>` +
           `<span class="log-owner">${participants.map(esc).join(" / ")}</span>` +
           (fx.length ? `<span class="log-effects">${fx.join(" · ")}</span>` : "");
+      } else if (ev.type === "move") {
+        li.className = "log-entry is-meta";
+        const mv = ev.move || {};
+        const cell = (c) => (c ? `(${c[0]},${c[1]})` : "");
+        li.textContent = `${mv.warrior || ""} 移动 ${cell(mv.from)} → ${cell(mv.to)}`;
       } else if (ev.type === "sp_leader_change") {
         li.className = "log-entry is-meta";
         const leader = ev.leader && S.warriors[ev.leader] ? S.warriors[ev.leader].name : "";
@@ -443,12 +464,26 @@
     els.actionText.innerHTML = formatAction(ev);
   }
 
+  function isFinished() {
+    return S.events.length > 0 && S.cursor >= S.events.length - 1;
+  }
+
   function updateButtons() {
-    els.btnStart.disabled = S.playing;
-    els.btnStart.textContent = "开始";
-    els.btnPause.disabled = !S.playing;
-    els.btnPause.textContent = S.paused ? "继续" : "暂停";
+    if (S.playing) {
+      els.btnPlay.textContent = S.paused ? "继续" : "暂停";
+      els.btnPlay.disabled = false;
+    } else if (isFinished()) {
+      els.btnPlay.textContent = "已结束";
+      els.btnPlay.disabled = true;
+    } else {
+      els.btnPlay.textContent = S.cursor < 0 ? "开始" : "继续";
+      els.btnPlay.disabled = !S.events.length;
+    }
+
     els.btnPrev.disabled = S.cursor <= -1;
+    const newDisabled = !S.canNewBattle || S.newBattlePending;
+    els.btnNew.disabled = newDisabled;
+    els.btnResultNew.disabled = newDisabled;
   }
 
   function showResult(ev) {
@@ -456,9 +491,12 @@
     const finalState = ev && ev.state ? ev.state : S.initial;
     const winner = battle.winnerSide;
     els.resultTitle.textContent = winner && S.warriors[winner] ? `${S.warriors[winner].name} 胜` : "平局";
+    const seed = S.doc.meta && S.doc.meta.seed;
     els.resultSub.textContent = `${
       battle.outcome === "timeout" ? "超时判定 · " : ""
-    }共 ${battle.rounds} 回合 · ${battle.ticks} tick`;
+    }共 ${battle.rounds} 回合 · ${battle.ticks} tick${
+      seed === null || seed === undefined ? "" : ` · 种子 ${seed}`
+    }`;
     els.resultStats.innerHTML = ["A", "B"]
       .map((side) => {
         const warrior = S.warriors[side];
@@ -588,6 +626,7 @@
   }
 
   function startOrResume() {
+    if (!S.events.length) return;
     if (S.playing) {
       if (S.paused) {
         S.paused = false;
@@ -596,11 +635,13 @@
       }
       return;
     }
-    if (S.cursor >= S.events.length - 1) {
-      replay();
-      return;
-    }
+    if (isFinished()) return;
     startPlayback(S.cursor + 1);
+  }
+
+  function togglePlay() {
+    if (S.playing) togglePause();
+    else startOrResume();
   }
 
   function togglePause() {
@@ -608,6 +649,80 @@
     S.paused = !S.paused;
     S.scene.setPaused(S.paused);
     updateButtons();
+  }
+
+  function isBattleDocument(doc) {
+    return Boolean(
+      doc &&
+        doc.warriors &&
+        doc.warriors.A &&
+        doc.warriors.B &&
+        Array.isArray(doc.events) &&
+        doc.events.length
+    );
+  }
+
+  function applyDocument(doc, options = {}) {
+    S.token += 1;
+    S.playing = false;
+    S.paused = false;
+    S.lastRound = null;
+    S.doc = doc;
+    S.events = doc.events;
+    S.warriors = doc.warriors;
+    S.initial = initialState(doc);
+
+    S.scene.init(doc);
+    Hud.init(doc);
+    S.log = new LogView();
+    renderLeadReport(doc);
+    $("btn-range").classList.remove("is-active");
+
+    els.progress.max = String(Math.max(0, S.events.length - 1));
+    els.progress.value = "0";
+    seekTo(-1);
+
+    if (options.autoplay) {
+      const current = doc;
+      const delay = options.delay === undefined ? 320 : options.delay;
+      window.setTimeout(() => {
+        if (S.doc === current && S.cursor === -1 && !S.playing) startPlayback(0);
+      }, delay);
+    }
+  }
+
+  async function probeNewBattle() {
+    try {
+      const response = await fetch("api/health", { cache: "no-store" });
+      if (!response.ok) return false;
+      const data = await response.json();
+      return Boolean(data && data.ok);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function newBattle() {
+    if (S.newBattlePending) return;
+
+    S.newBattlePending = true;
+    els.btnNew.textContent = "生成中…";
+    updateButtons();
+    try {
+      const response = await fetch("api/battle", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const doc = await response.json();
+      if (!isBattleDocument(doc)) throw new Error("战斗数据格式不正确");
+      applyDocument(doc, { autoplay: true });
+      els.actionText.textContent = "新战局已生成，战斗即将开始";
+    } catch (error) {
+      console.error("生成新战局失败:", error);
+      els.actionText.textContent = "生成新战局失败，请确认本地服务仍在运行";
+    } finally {
+      S.newBattlePending = false;
+      els.btnNew.textContent = "新的一局";
+      updateButtons();
+    }
   }
 
   /* ================= 初始化 ================= */
@@ -624,12 +739,17 @@
   }
 
   function bindControls() {
-    els.btnStart.addEventListener("click", startOrResume);
-    els.btnPause.addEventListener("click", togglePause);
+    els.btnPlay.addEventListener("click", togglePlay);
+    els.btnNew.addEventListener("click", newBattle);
     els.btnReplay.addEventListener("click", replay);
     els.btnPrev.addEventListener("click", () => seekTo(S.cursor - 1));
     els.btnEnd.addEventListener("click", () => seekTo(S.events.length - 1));
+    $("btn-range").addEventListener("click", (event) => {
+      const on = S.scene.toggleRange();
+      event.currentTarget.classList.toggle("is-active", on);
+    });
     $("btn-result-replay").addEventListener("click", replay);
+    els.btnResultNew.addEventListener("click", newBattle);
 
     document.querySelectorAll(".speed-btn").forEach((button) => {
       button.addEventListener("click", () => {
@@ -655,8 +775,7 @@
       if (event.target && event.target.tagName === "INPUT") return;
       if (event.key === " ") {
         event.preventDefault();
-        if (S.playing) togglePause();
-        else startOrResume();
+        togglePlay();
       } else if (event.key === "ArrowLeft") {
         event.preventDefault();
         seekTo(S.cursor - 1);
@@ -677,30 +796,22 @@
       return;
     }
 
-    if (!doc || !Array.isArray(doc.events) || !doc.events.length || !doc.warriors) {
+    if (!isBattleDocument(doc)) {
       els.emptyState.hidden = false;
       return;
     }
 
-    S.doc = doc;
-    S.events = doc.events;
-    S.warriors = doc.warriors;
-    S.initial = initialState(doc);
-
     S.scene = new window.BattleScene();
-    S.scene.init(doc);
-    Hud.init(doc);
-    S.log = new LogView();
-    renderLeadReport(doc);
-
-    els.progress.max = String(Math.max(0, S.events.length - 1));
-    els.progress.value = "0";
     bindControls();
-    seekTo(-1);
+    applyDocument(doc, { autoplay: true, delay: 700 });
 
-    window.setTimeout(() => {
-      if (S.cursor === -1) startPlayback(0);
-    }, 700);
+    S.canNewBattle = await probeNewBattle();
+    if (!S.canNewBattle) {
+      const hint = "需用 python main.py --serve-web 启动本地服务";
+      els.btnNew.title = hint;
+      els.btnResultNew.title = hint;
+    }
+    updateButtons();
   }
 
   if (document.readyState === "loading") {

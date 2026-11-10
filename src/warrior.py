@@ -4,7 +4,7 @@
 import math
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from src.constants import (
     WINDUP_BAR,
@@ -14,9 +14,11 @@ from src.constants import (
     HP_COEFFICIENT,
     DEFENDER_AP_LOSS_RATIO,
     ATTACKER_BACKSWING_LOSS_RATIO,
+    MOVE_SPEED_BASE,
+    MOVE_CELL_PROGRESS,
 )
 from src.enums import DefenseType, AttackPhase
-from src.weapons import is_defense_forbidden
+from src.weapons import UNARMED_REACH, is_defense_forbidden
 
 if TYPE_CHECKING:
     from src.skills import Skill
@@ -54,6 +56,9 @@ class WarriorSnapshot:
     weapon_name: str = ""
     weapon_category: Optional[int] = None
     weapon_category_label: str = ""
+    # 射程与站位（无地图的战斗 position 为 None）
+    reach: int = UNARMED_REACH
+    position: Optional[Tuple[int, int]] = None
 
 
 class Warrior:
@@ -90,6 +95,11 @@ class Warrior:
         # 攻击阶段状态
         self.attack_phase = AttackPhase.WINDUP  # 初始为前摇阶段
 
+        # 空间状态（由战斗引擎布阵/驱动，无地图时保持 None/空）
+        self.position: Optional[Tuple[int, int]] = None  # 网格站位
+        self.move_path: List[Tuple[int, int]] = []  # 剩余路径（不含当前格）
+        self.move_progress = 0.0  # 当前格的移动进度
+
         # 初始化武将的运行时状态_基础属性(四维属性)
         self.martialarts_init = max(1, martialarts)  # 武艺，最小值为1
         self.agility_init = max(1, agility)  # 初始敏捷，最小值为1
@@ -121,6 +131,8 @@ class Warrior:
             weapon_name=self.weapon.name if self.weapon else "",
             weapon_category=self.weapon.category.value if self.weapon else None,
             weapon_category_label=self.weapon.category_label if self.weapon else "",
+            reach=self.reach,
+            position=self.position,
         )
     
     @property
@@ -142,6 +154,54 @@ class Warrior:
     def attack_speed(self) -> float:
         """根据敏捷和体力比例计算攻击速度"""
         return 50 + self.agility * 2
+
+    @property
+    def reach(self) -> int:
+        """攻击射程（格）：兵器射程，无兵器为 1"""
+        return self.weapon.effective_reach if self.weapon else UNARMED_REACH
+
+    @property
+    def move_speed(self) -> float:
+        """移动速度：基础值 + 当前敏捷（随体力衰减）"""
+        return MOVE_SPEED_BASE + self.agility
+
+    @property
+    def is_moving(self) -> bool:
+        """是否正在沿路径移动"""
+        return bool(self.move_path)
+
+    def begin_move(self, path: List[Tuple[int, int]]) -> bool:
+        """开始移动：重置前摇；后摇期间锁定站位不能移动"""
+        if not self.is_alive or self.is_in_backswing() or not path:
+            return False
+        self.ap = 0.0  # 起手移动打断前摇
+        self.move_path = list(path)
+        self.move_progress = 0.0
+        return True
+
+    def tick_move(self, tick_rate: float) -> Optional[Tuple[int, int]]:
+        """累积移动进度，返回本 tick 走完格子后的新站位（未走完整格返回 None）"""
+        if not self.is_alive or not self.is_moving:
+            return None
+        self.move_progress += self.move_speed * tick_rate
+        advanced = None
+        while self.move_progress >= MOVE_CELL_PROGRESS and self.move_path:
+            self.move_progress -= MOVE_CELL_PROGRESS
+            advanced = self.advance_cell()
+        if not self.move_path:
+            self.move_progress = 0.0
+        return advanced
+
+    def advance_cell(self) -> Tuple[int, int]:
+        """走进路径的下一格"""
+        next_cell = self.move_path.pop(0)
+        self.position = next_cell
+        return next_cell
+
+    def stop_move(self) -> None:
+        """停止移动，清空路径与进度"""
+        self.move_path = []
+        self.move_progress = 0.0
 
     @property
     def attack_power(self) -> float:
@@ -187,8 +247,8 @@ class Warrior:
             self.ap_bonus_count = 1
 
     def tick_ap(self, tick_rate: float) -> None:
-        """根据攻击速度累积行动点数"""
-        if self.is_alive:
+        """根据攻击速度累积行动点数（移动中不攒 AP）"""
+        if self.is_alive and not self.is_moving:
             self.ap += self.attack_speed * tick_rate
 
     def gain_ap(self, amount: float) -> None:
@@ -221,9 +281,10 @@ class Warrior:
         return self.weapon.description if self.weapon else ""
 
     def can_attack(self) -> bool:
-        """检查是否可以发起攻击（前摇阶段且达到前摇阈值）"""
+        """检查是否可以发起攻击（前摇阶段且达到前摇阈值，移动中不能攻击）"""
         return (
             self.is_alive
+            and not self.is_moving
             and self.attack_phase == AttackPhase.WINDUP
             and self.ap >= WINDUP_BAR
         )

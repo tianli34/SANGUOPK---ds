@@ -47,10 +47,18 @@ _CATEGORY_STYLES = {
 
 @dataclass(frozen=True)
 class Weapon:
-    """具体兵器：名称 + 所属分类"""
+    """具体兵器：名称 + 所属分类 + 可选的单件射程配置"""
 
     name: str
     category: WeaponCategory
+    reach: Optional[int] = None
+
+    @property
+    def effective_reach(self) -> int:
+        """实际射程：单件配置优先，否则按类别默认"""
+        if self.reach is not None:
+            return self.reach
+        return CATEGORY_DEFAULT_REACH[self.category]
 
     @property
     def category_label(self) -> str:
@@ -59,6 +67,17 @@ class Weapon:
     @property
     def description(self) -> str:
         return f"{self.name} · {self.category_label}"
+
+
+# 类别默认射程（格）：枪矛=3 / 长柄刀=2 / 戟=2 / 重型=1
+CATEGORY_DEFAULT_REACH: Dict[WeaponCategory, int] = {
+    WeaponCategory.SPEAR: 3,
+    WeaponCategory.GREAT_BLADE: 2,
+    WeaponCategory.HALBERD: 2,
+    WeaponCategory.HEAVY: 1,
+}
+
+UNARMED_REACH = 1  # 无兵器射程
 
 
 # 兵器注册表：兵器名 -> 兵器实例

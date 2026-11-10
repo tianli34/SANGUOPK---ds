@@ -553,6 +553,66 @@ body {
   z-index: 30;
 }
 
+/* ============ 演武场网格（地图模式） ============ */
+
+.map-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  pointer-events: none;
+}
+.map-grid[hidden] { display: none; }
+
+.map-cell {
+  position: relative;
+  border: 1px solid rgba(216, 183, 108, 0.1);
+}
+
+.map-cell.is-rock::before {
+  content: "";
+  position: absolute;
+  inset: 10% 8%;
+  border-radius: 46% 54% 52% 48% / 58% 60% 40% 42%;
+  background:
+    radial-gradient(circle at 32% 26%, rgba(214, 200, 178, 0.5), transparent 42%),
+    linear-gradient(160deg, #5a5348 0%, #3d382f 55%, #241f19 100%);
+  box-shadow:
+    inset -4px -6px 10px rgba(0, 0, 0, 0.55),
+    inset 3px 4px 8px rgba(230, 214, 188, 0.14),
+    0 6px 12px rgba(0, 0, 0, 0.5);
+}
+
+.map-cell.in-range-a {
+  background: rgba(216, 183, 108, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(216, 183, 108, 0.4);
+}
+.map-cell.in-range-b {
+  background: rgba(70, 185, 232, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(70, 185, 232, 0.38);
+}
+.map-cell.in-range-a.in-range-b {
+  background: rgba(120, 200, 150, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(120, 200, 150, 0.45);
+}
+
+/* 地图模式：单位按坐标定位，中心锚定格中心，朝向由 JS 驱动 */
+.stage.has-map .unit {
+  width: 12%;
+  left: 0;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+}
+.stage.has-map .unit .mirror { transform: none; }
+.stage.has-map .unit.face-left .mirror { transform: scaleX(-1); }
+
+.btn.is-active {
+  border-color: rgba(216, 183, 108, 0.7);
+  color: var(--gold-bright);
+  background: rgba(216, 183, 108, 0.16);
+}
+
 /* ============ 骑将 ============ */
 
 .unit {
@@ -1134,6 +1194,13 @@ body {
   font-family: var(--mono);
   font-size: 16px;
   color: var(--text);
+}
+
+.result-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .empty-state {

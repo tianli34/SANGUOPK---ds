@@ -38,6 +38,11 @@
       this.defSeq = 0;
       this.clashSeq = 0;
       this.warriors = null;
+      this.map = null;
+      this.mapGrid = document.getElementById("map-grid");
+      this.cells = [];
+      this.positions = { A: null, B: null };
+      this.rangeOn = false;
     }
 
     init(doc) {
@@ -55,13 +60,150 @@
       this.units.A.style.cssText = window.WarriorArt.cssVars(styleA);
       this.units.B.style.cssText = window.WarriorArt.cssVars(styleB);
 
+      this.setupMap(doc);
       this.spawnDust();
-      this.setSpeed(1);
+      this.setSpeed(this.speed || 1);
+    }
+
+    /* ---------------- 地图模式（version 2） ---------------- */
+
+    setupMap(doc) {
+      this.map = doc.map || null;
+      this.rangeOn = false;
+      this.cells = [];
+      this.mapGrid.innerHTML = "";
+      this.stage.classList.toggle("has-map", Boolean(this.map));
+      document.getElementById("btn-range").hidden = !this.map;
+      ["A", "B"].forEach((side) => this.units[side].classList.remove("face-left"));
+      if (!this.map) {
+        this.mapGrid.hidden = true;
+        this.positions = { A: null, B: null };
+        return;
+      }
+      this.mapGrid.hidden = false;
+      this.mapGrid.style.gridTemplateColumns = `repeat(${this.map.width}, 1fr)`;
+      this.mapGrid.style.gridTemplateRows = `repeat(${this.map.height}, 1fr)`;
+      const rocks = new Set(this.map.obstacles.map(([x, y]) => `${x},${y}`));
+      for (let y = 0; y < this.map.height; y += 1) {
+        for (let x = 0; x < this.map.width; x += 1) {
+          const cell = document.createElement("div");
+          cell.className = "map-cell";
+          if (rocks.has(`${x},${y}`)) cell.classList.add("is-rock");
+          this.mapGrid.appendChild(cell);
+          this.cells.push({ x, y, el: cell, rock: rocks.has(`${x},${y}`) });
+        }
+      }
+      ["A", "B"].forEach((side) => {
+        const spawn = this.map.spawns[side];
+        this.positions[side] = { x: spawn[0], y: spawn[1] };
+        this.placeUnit(side, spawn[0], spawn[1]);
+      });
+      this.updateFacing();
+      this.updateRange();
+    }
+
+    /** 把单位锚定到格子中心（坐标可为小数，用于移动插值） */
+    placeUnit(side, x, y) {
+      const unit = this.units[side];
+      unit.style.left = `${((x + 0.5) / this.map.width) * 100}%`;
+      unit.style.top = `${((y + 0.5) / this.map.height) * 100}%`;
+      unit.style.zIndex = String(10 + Math.round(y));
+    }
+
+    anchorPercent(side) {
+      const pos = this.positions[side];
+      return {
+        x: ((pos.x + 0.5) / this.map.width) * 100,
+        y: ((pos.y + 0.5) / this.map.height) * 100,
+      };
+    }
+
+    facingDir(side) {
+      if (!this.map) return side === "A" ? 1 : -1;
+      return this.units[side].classList.contains("face-left") ? -1 : 1;
+    }
+
+    /** 朝向动态化：始终面向对手，同列时保持默认朝向 */
+    updateFacing() {
+      if (!this.map || !this.positions.A || !this.positions.B) return;
+      ["A", "B"].forEach((side) => {
+        const other = side === "A" ? "B" : "A";
+        const dx = this.positions[other].x - this.positions[side].x;
+        const dir = dx === 0 ? (side === "A" ? 1 : -1) : Math.sign(dx);
+        const unit = this.units[side];
+        unit.style.setProperty("--dir", String(dir));
+        unit.classList.toggle("face-left", dir === -1);
+      });
+    }
+
+    toggleRange() {
+      this.rangeOn = !this.rangeOn;
+      this.updateRange();
+      return this.rangeOn;
+    }
+
+    /** 射程格高亮：双方当前站位切比雪夫距离 <= 各自射程的可站立格 */
+    updateRange() {
+      if (!this.map) return;
+      this.cells.forEach((cell) => cell.el.classList.remove("in-range-a", "in-range-b"));
+      if (!this.rangeOn) return;
+      ["A", "B"].forEach((side) => {
+        const pos = this.positions[side];
+        if (!pos || this.units[side].classList.contains("fallen")) return;
+        const weapon = this.warriors[side].weapon;
+        const reach = (weapon && weapon.reach) || 1;
+        this.cells.forEach((cell) => {
+          if (cell.rock) return;
+          const dist = Math.max(Math.abs(cell.x - pos.x), Math.abs(cell.y - pos.y));
+          if (dist <= reach) cell.el.classList.add(side === "A" ? "in-range-a" : "in-range-b");
+        });
+      });
+    }
+
+    /** rAF 补间：暂停冻结、倍速实时生效、回退即作废；不用 CSS transition */
+    tween(baseMs, onFrame, gen) {
+      return new Promise((resolve) => {
+        let elapsed = 0;
+        let last = performance.now();
+        const step = (now) => {
+          if (gen !== this.generation) return resolve(false);
+          if (!this.paused) elapsed += (now - last) * this.speed;
+          last = now;
+          const t = Math.min(1, elapsed / baseMs);
+          onFrame(t);
+          if (t >= 1) return resolve(true);
+          window.requestAnimationFrame(step);
+        };
+        window.requestAnimationFrame(step);
+      });
+    }
+
+    async moveUnit(ev, gen) {
+      if (!this.map || !ev.move || !ev.move.side) {
+        await this.wait(this.ms(120));
+        return;
+      }
+      const side = ev.move.side;
+      const from = ev.move.from;
+      const to = ev.move.to;
+      const ok = await this.tween(240, (t) => {
+        const x = from[0] + (to[0] - from[0]) * t;
+        const y = from[1] + (to[1] - from[1]) * t;
+        this.positions[side] = { x, y };
+        this.placeUnit(side, x, y);
+        this.updateFacing();
+      }, gen);
+      if (!ok || gen !== this.generation) return;
+      this.positions[side] = { x: to[0], y: to[1] };
+      this.placeUnit(side, to[0], to[1]);
+      this.updateFacing();
+      this.updateRange();
     }
 
     spawnDust() {
       const dust = document.getElementById("dust");
       if (!dust) return;
+      dust.innerHTML = "";
       for (let i = 0; i < 26; i += 1) {
         const particle = document.createElement("span");
         particle.style.left = `${Math.random() * 100}%`;
@@ -133,12 +275,22 @@
     /** 按快照重建静态战场（不播放动画） */
     restore(state) {
       this.cancel();
+      if (this.map) {
+        ["A", "B"].forEach((side) => {
+          const entry = state && state[side];
+          const pos = entry && entry.position ? entry.position : this.map.spawns[side];
+          this.positions[side] = { x: pos[0], y: pos[1] };
+          this.placeUnit(side, pos[0], pos[1]);
+        });
+        this.updateFacing();
+      }
       Object.keys(this.units).forEach((side) => {
         const alive = state && state[side] ? state[side].alive : true;
         if (!alive) {
           this.units[side].classList.add("fallen", "fallen-instant");
         }
       });
+      this.updateRange();
     }
 
     async pose(side, className, baseMs) {
@@ -156,6 +308,11 @@
     }
 
     contactPoint(attackerSide) {
+      if (this.map && this.positions.A && this.positions.B) {
+        const a = this.anchorPercent("A");
+        const b = this.anchorPercent("B");
+        return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 6 };
+      }
       return attackerSide === "A"
         ? { x: 55, y: 45 }
         : { x: 45, y: 45 };
@@ -174,6 +331,9 @@
           break;
         case "attack":
           await this.attack(ev, beforeState, onImpact, gen);
+          break;
+        case "move":
+          await this.moveUnit(ev, gen);
           break;
         case "clash":
           await this.clash(ev, beforeState, onImpact, gen);
@@ -218,7 +378,7 @@
       await this.wait(this.ms(210));
       if (gen !== this.generation) return;
 
-      this.slash(contact.x, contact.y, atk === "B");
+      this.slash(contact.x, contact.y, this.facingDir(atk) === -1);
       const defPose = this.pose(def, DEFENSE_POSE[defense.type] || "guarding", isCounter ? 780 : 620);
       this.showDefense(def, defense);
 
@@ -238,7 +398,7 @@
       if (isCounter) {
         await this.wait(this.ms(150));
         if (gen !== this.generation) return;
-        this.slash(contact.x, contact.y, def === "B");
+        this.slash(contact.x, contact.y, this.facingDir(def) === -1);
         this.sparks(contact.x, contact.y, "#ffcf8a");
         await this.wait(this.ms(40));
       }
@@ -299,6 +459,7 @@
       banner.hidden = false;
       banner.classList.remove("at-a", "at-b", "show");
       banner.classList.add(side === "A" ? "at-a" : "at-b");
+      banner.style.left = this.map && this.positions[side] ? `${this.anchorPercent(side).x}%` : "";
       this.defWord.textContent = defense.label || DEFENSE_VERB[defense.type] || "防御";
       this.defResult.textContent = defense.success ? "成功" : "失败";
       this.defResult.className = `def-result ${defense.success ? "is-success" : "is-fail"}`;
@@ -328,9 +489,15 @@
       const node = document.createElement("div");
       node.className = `float-num is-${kind}`;
       node.textContent = `${value > 0 ? "+" : ""}${rounded}`;
-      const baseX = side === "A" ? 29 : 71;
+      let baseX = side === "A" ? 29 : 71;
+      let baseY = 44;
+      if (this.map && this.positions[side]) {
+        const anchor = this.anchorPercent(side);
+        baseX = anchor.x;
+        baseY = anchor.y - 16;
+      }
       node.style.left = `${baseX + (Math.random() * 5 - 2.5)}%`;
-      node.style.top = `${44 - stack * 7}%`;
+      node.style.top = `${baseY - stack * 7}%`;
       this.floatLayer.appendChild(node);
       this.floatStacks[side] += 1;
       this.later(1250, () => {
@@ -388,8 +555,14 @@
     arc(side) {
       const arc = document.createElement("div");
       arc.className = "arc-fx";
-      arc.style.left = side === "A" ? "31%" : "69%";
-      arc.style.top = "47%";
+      if (this.map && this.positions[side]) {
+        const anchor = this.anchorPercent(side);
+        arc.style.left = `${anchor.x}%`;
+        arc.style.top = `${anchor.y - 8}%`;
+      } else {
+        arc.style.left = side === "A" ? "31%" : "69%";
+        arc.style.top = "47%";
+      }
       this.fxLayer.appendChild(arc);
       this.later(760, () => arc.remove());
     }

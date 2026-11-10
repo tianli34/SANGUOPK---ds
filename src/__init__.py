@@ -13,8 +13,19 @@ from src.weapons import (
     WEAPON_REGISTRY,
     get_weapon,
     is_defense_forbidden,
+    CATEGORY_DEFAULT_REACH,
+    UNARMED_REACH,
 )
-from src.enums import DefenseType
+from src.map import (
+    BattleMap,
+    MAP_REGISTRY,
+    DEFAULT_MAP_NAME,
+    get_map,
+    get_default_map,
+    register_map,
+    chebyshev_distance,
+)
+from src.enums import DefenseType, Terrain
 from src.constants import (
     BACKSWING_BAR,
     TICK_RATE,
@@ -48,6 +59,16 @@ __all__ = [
     "WEAPON_REGISTRY",
     "get_weapon",
     "is_defense_forbidden",
+    "CATEGORY_DEFAULT_REACH",
+    "UNARMED_REACH",
+    "BattleMap",
+    "MAP_REGISTRY",
+    "DEFAULT_MAP_NAME",
+    "get_map",
+    "get_default_map",
+    "register_map",
+    "chebyshev_distance",
+    "Terrain",
     "BACKSWING_BAR",
     "TICK_RATE",
     "CLASH_AP_THRESHOLD",

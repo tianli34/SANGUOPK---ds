@@ -35,6 +35,10 @@ ARMOR_PENETRATION = 1.0  # 破甲系数
 MAX_ROUNDS = 300  # 最大回合数
 MAX_TICKS = 30000  # 最大时间刻度（防止无限循环）
 
+# 移动系统
+MOVE_SPEED_BASE = 50  # 移速基础值（移速 = 基础值 + 当前敏捷）
+MOVE_CELL_PROGRESS = 100  # 走完一格所需的移动进度
+
 # 防御参数
 DEFENSE_PARAMS = {
     "block": {  # 格挡

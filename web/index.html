@@ -100,6 +100,8 @@
         </div>
         <div class="dust" id="dust"></div>
 
+        <div class="map-grid" id="map-grid" hidden></div>
+
         <div class="fx-layer" id="fx-layer"></div>
 
         <div class="unit unit--A" id="unit-A">
@@ -132,7 +134,10 @@
             <h2 class="result-title" id="result-title">—</h2>
             <p class="result-sub" id="result-sub"></p>
             <div class="result-stats" id="result-stats"></div>
-            <button class="btn primary" id="btn-result-replay" type="button">重新播放</button>
+            <div class="result-actions">
+              <button class="btn primary" id="btn-result-replay" type="button">重新播放</button>
+              <button class="btn" id="btn-result-new" type="button">再来一局</button>
+            </div>
           </div>
         </div>
 
@@ -161,8 +166,8 @@
 
       <section class="bottom">
         <div class="controls">
-          <button class="btn primary" id="btn-start" type="button">开始</button>
-          <button class="btn" id="btn-pause" type="button">暂停</button>
+          <button class="btn primary" id="btn-play" type="button">开始</button>
+          <button class="btn" id="btn-new" type="button" title="随机生成一场新战斗">新的一局</button>
           <div class="speed-group" role="group" aria-label="播放速度">
             <button class="speed-btn is-active" data-speed="1" type="button">1×</button>
             <button class="speed-btn" data-speed="2" type="button">2×</button>
@@ -171,6 +176,7 @@
           <button class="btn" id="btn-prev" type="button">上一步</button>
           <button class="btn" id="btn-replay" type="button">重新播放</button>
           <button class="btn" id="btn-end" type="button">跳到结果</button>
+          <button class="btn" id="btn-range" type="button" title="显示双方当前射程覆盖的格子" hidden>射程</button>
           <div class="event-counter" id="event-counter">0 / 0</div>
         </div>
 
