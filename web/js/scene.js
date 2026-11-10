@@ -604,16 +604,47 @@
       banner.hidden = false;
       banner.classList.remove("at-a", "at-b", "show");
       banner.classList.add(side === "A" ? "at-a" : "at-b");
-      banner.style.left = this.map && this.positions[side] ? `${this.anchorPercent(side).x}%` : "";
       this.defWord.textContent = defense.label || DEFENSE_VERB[defense.type] || "防御";
       this.defResult.textContent = defense.success ? "成功" : "失败";
       this.defResult.className = `def-result ${defense.success ? "is-success" : "is-fail"}`;
+      this.placeDefenseBanner(side);
       void banner.offsetWidth;
       banner.classList.add("show");
       const seq = ++this.defSeq;
       this.later(1150, () => {
         if (seq === this.defSeq) banner.hidden = true;
       });
+    }
+
+    /** 横幅跟随防守方站位：水平相对武将盒左移 1.6 倍自身宽度，置于武将上方 48px；上方放不下时优先贴顶 */
+    placeDefenseBanner(side) {
+      const banner = this.defenseBanner;
+      const unit = this.units[side];
+      const host = banner.offsetParent;
+      if (!this.map || !this.positions[side] || !host || !unit) {
+        banner.style.left = "";
+        banner.style.top = "";
+        return;
+      }
+      const half = banner.offsetWidth / 2;
+      const height = banner.offsetHeight;
+      const overhang = this.defResult.offsetWidth + 8;
+      const edge = 8;
+      const topGap = 48;
+      const groundGap = 12;
+      const headTop = unit.offsetTop;
+      const center = unit.offsetLeft + unit.offsetWidth / 2 - banner.offsetWidth * 1.6;
+      const left = Math.min(
+        Math.max(center, half + edge),
+        Math.max(half + edge, host.clientWidth - half - overhang - edge),
+      );
+      let top = headTop - height - topGap;
+      if (top < edge) {
+        top = unit.offsetTop >= height + edge ? edge : unit.offsetTop + unit.offsetHeight + groundGap;
+      }
+      top = Math.min(Math.max(top, edge), Math.max(edge, host.clientHeight - height - edge));
+      banner.style.left = `${left}px`;
+      banner.style.top = `${top}px`;
     }
 
     spawnFloating(ev) {

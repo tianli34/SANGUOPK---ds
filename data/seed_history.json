@@ -1,103 +1,7 @@
 {
   "limit": 100,
-  "updatedAt": "2026-11-10T23:11:55",
+  "updatedAt": "2026-11-10T23:55:46",
   "records": [
-    {
-      "seed": 123,
-      "rounds": 136,
-      "ticks": 5601,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 2330.47,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.2453,
-      "recordedAt": "2026-11-10T12:19:19"
-    },
-    {
-      "seed": 124,
-      "rounds": 122,
-      "ticks": 4680,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 3714.45,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.391,
-      "recordedAt": "2026-11-10T12:19:19"
-    },
-    {
-      "seed": 125,
-      "rounds": 130,
-      "ticks": 5363,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 2067.66,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.2176,
-      "recordedAt": "2026-11-10T12:19:19"
-    },
-    {
-      "seed": 123,
-      "rounds": 136,
-      "ticks": 5601,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 2330.47,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.2453,
-      "recordedAt": "2026-11-10T12:19:19"
-    },
-    {
-      "seed": 124,
-      "rounds": 122,
-      "ticks": 4680,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 3714.45,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.391,
-      "recordedAt": "2026-11-10T12:19:19"
-    },
-    {
-      "seed": 125,
-      "rounds": 130,
-      "ticks": 5363,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 2067.66,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.2176,
-      "recordedAt": "2026-11-10T12:19:19"
-    },
-    {
-      "seed": 123,
-      "rounds": 136,
-      "ticks": 5601,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 2330.47,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.2453,
-      "recordedAt": "2026-11-10T12:22:23"
-    },
-    {
-      "seed": 123,
-      "rounds": 136,
-      "ticks": 5601,
-      "outcome": "team_a_win",
-      "winnerSide": "A",
-      "winnerName": "马超",
-      "winnerHp": 2330.47,
-      "winnerHpMax": 9500,
-      "winnerHpPercent": 0.2453,
-      "recordedAt": "2026-11-10T12:34:38"
-    },
     {
       "seed": 123,
       "rounds": 136,
@@ -1201,6 +1105,102 @@
       "winnerHpMax": 9700,
       "winnerHpPercent": 0.2171,
       "recordedAt": "2026-11-10T23:11:55"
+    },
+    {
+      "seed": 123,
+      "rounds": 137,
+      "ticks": 5902,
+      "outcome": "team_a_win",
+      "winnerSide": "A",
+      "winnerName": "马超",
+      "winnerHp": 1629.75,
+      "winnerHpMax": 9500,
+      "winnerHpPercent": 0.1716,
+      "recordedAt": "2026-11-10T23:30:57"
+    },
+    {
+      "seed": 124,
+      "rounds": 103,
+      "ticks": 3717,
+      "outcome": "team_b_win",
+      "winnerSide": "B",
+      "winnerName": "许褚",
+      "winnerHp": 4591.42,
+      "winnerHpMax": 9900,
+      "winnerHpPercent": 0.4638,
+      "recordedAt": "2026-11-10T23:30:57"
+    },
+    {
+      "seed": 125,
+      "rounds": 136,
+      "ticks": 5637,
+      "outcome": "team_a_win",
+      "winnerSide": "A",
+      "winnerName": "马超",
+      "winnerHp": 1736.1,
+      "winnerHpMax": 9500,
+      "winnerHpPercent": 0.1827,
+      "recordedAt": "2026-11-10T23:30:57"
+    },
+    {
+      "seed": 123,
+      "rounds": 137,
+      "ticks": 5902,
+      "outcome": "team_a_win",
+      "winnerSide": "A",
+      "winnerName": "马超",
+      "winnerHp": 1629.75,
+      "winnerHpMax": 9500,
+      "winnerHpPercent": 0.1716,
+      "recordedAt": "2026-11-10T23:30:57"
+    },
+    {
+      "seed": 124,
+      "rounds": 103,
+      "ticks": 3717,
+      "outcome": "team_b_win",
+      "winnerSide": "B",
+      "winnerName": "许褚",
+      "winnerHp": 4591.42,
+      "winnerHpMax": 9900,
+      "winnerHpPercent": 0.4638,
+      "recordedAt": "2026-11-10T23:30:57"
+    },
+    {
+      "seed": 125,
+      "rounds": 136,
+      "ticks": 5637,
+      "outcome": "team_a_win",
+      "winnerSide": "A",
+      "winnerName": "马超",
+      "winnerHp": 1736.1,
+      "winnerHpMax": 9500,
+      "winnerHpPercent": 0.1827,
+      "recordedAt": "2026-11-10T23:30:57"
+    },
+    {
+      "seed": 20261110,
+      "rounds": 74,
+      "ticks": 2702,
+      "outcome": "team_a_win",
+      "winnerSide": "A",
+      "winnerName": "赵云",
+      "winnerHp": 2325.06,
+      "winnerHpMax": 9500,
+      "winnerHpPercent": 0.2447,
+      "recordedAt": "2026-11-10T23:31:10"
+    },
+    {
+      "seed": 2898022118,
+      "rounds": 104,
+      "ticks": 3502,
+      "outcome": "team_a_win",
+      "winnerSide": "A",
+      "winnerName": "关羽",
+      "winnerHp": 5418.4,
+      "winnerHpMax": 9700,
+      "winnerHpPercent": 0.5586,
+      "recordedAt": "2026-11-10T23:55:46"
     }
   ]
 }

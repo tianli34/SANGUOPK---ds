@@ -85,6 +85,7 @@ WEAPON_REGISTRY: Dict[str, Weapon] = {
     weapon.name: weapon
     for weapon in (
         Weapon("虎头湛金枪", WeaponCategory.SPEAR),
+        Weapon("龙胆亮银枪", WeaponCategory.SPEAR),
         Weapon("血煞虎头刀", WeaponCategory.HEAVY),
         Weapon("青龙偃月刀", WeaponCategory.GREAT_BLADE),
     )

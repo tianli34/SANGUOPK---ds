@@ -31,6 +31,7 @@ python main.py --a-warrior 关羽 --b-warrior 马超 --export-web
 
 | 名将 | 武艺 | 敏捷 | 力量 | 胆气 | 体力 | 兵器 |
 |---|---|---|---|---|---|---|
+| 赵云 | 97 | 96 | 92 | 98 | 95 | 龙胆亮银枪（枪矛，射程 3） |
 | 马超 | 96 | 98 | 91 | 90 | 95 | 虎头湛金枪（枪矛，射程 3） |
 | 许褚 | 91 | 88 | 99 | 91 | 99 | 血煞虎头刀（重型，射程 1） |
 | 关羽 | 97 | 88 | 97 | 96 | 97 | 青龙偃月刀（长柄大刀，射程 2） |
@@ -84,12 +85,16 @@ python -m http.server 8000
 
 ### 5. 武将精灵图
 
-关羽的战场形象与头像使用 `武将精灵图/关羽` 中的三张 Cocos2d 图集。`tools/build_sprite.py` 会导出图集内的 5 个朝向（1 下、5 上、6 右上、7 右、8 右下），把每个朝向的待机、移动、攻击、受击硬直、阵亡帧裁切对齐成横向条带，并共用同一包围盒，切换朝向时单位大小不跳变：
+关羽、赵云、马超的战场形象与头像使用 `武将精灵图/<武将>` 中的 Cocos2d 图集。`tools/build_sprite.py` 会导出图集内的 5 个朝向（1 下、5 上、6 右上、7 右、8 右下），把每个朝向的待机、移动、攻击、受击硬直、阵亡帧裁切对齐成横向条带，并共用同一包围盒，切换朝向时单位大小不跳变：
 
 ```bash
 # 开发期需要安装 Pillow；生成物已提交，运行网页仍只依赖标准库
 python tools/build_sprite.py "武将精灵图/关羽" --name 关羽 --slug guanyu \
     --portrait "325,182,400,257"
+python tools/build_sprite.py "武将精灵图/赵云" --name 赵云 --slug zhaoyun \
+    --portrait "316,203,396,283"
+python tools/build_sprite.py "武将精灵图/马超" --name 马超 --slug machao \
+    --portrait "329,204,404,279"
 ```
 
 - 生成 `web/assets/sprites/<slug>/{idle,run,attack,stuck,die}-<朝向>.png`、`portrait.png`，并合并写入 `web/data/sprites.js`。

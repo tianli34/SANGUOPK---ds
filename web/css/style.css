@@ -745,8 +745,8 @@ body {
 
 @keyframes lunge {
   0% { transform: translateX(0); }
-  32% { transform: translateX(calc(39px * var(--dir))) translateY(-5px); }
-  52% { transform: translateX(calc(32px * var(--dir))) translateY(0); }
+  32% { transform: translateX(calc(20px * var(--dir))) translateY(-5px); }
+  52% { transform: translateX(calc(16px * var(--dir))) translateY(0); }
   100% { transform: translateX(0); }
 }
 
@@ -1019,9 +1019,6 @@ body {
   position: absolute;
   z-index: 42;
   top: 15%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
   pointer-events: none;
   transform: translateX(-50%);
 }
@@ -1039,28 +1036,38 @@ body {
 
 .def-word {
   font-family: var(--kai);
-  font-size: clamp(42px, 4.6vw, 72px);
+  font-size: clamp(18px, 2vw, 28px);
   font-weight: 700;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   color: #fffdf7;
   text-shadow:
-    -2px -2px 0 #0a0c10,
-    2px -2px 0 #0a0c10,
-    -2px 2px 0 #0a0c10,
-    2px 2px 0 #0a0c10,
-    0 0 26px rgba(255, 214, 130, 0.4);
+    -1px -1px 0 #0a0c10,
+    1px -1px 0 #0a0c10,
+    -1px 1px 0 #0a0c10,
+    1px 1px 0 #0a0c10,
+    0 0 18px rgba(255, 214, 130, 0.4);
   white-space: nowrap;
 }
 
+.defense-banner .def-word { display: block; }
+
 .def-result {
   font-family: var(--mono);
-  font-size: clamp(12px, 1.2vw, 16px);
+  font-size: clamp(10px, 1vw, 13px);
   font-weight: 700;
-  letter-spacing: 0.14em;
-  padding: 5px 9px;
+  letter-spacing: 0.1em;
+  padding: 3px 7px;
   border-radius: 3px;
-  transform: translateY(10px);
+  transform: translateY(6px);
   white-space: nowrap;
+}
+
+.defense-banner .def-result {
+  position: absolute;
+  left: 100%;
+  bottom: 1px;
+  margin-left: 8px;
+  transform: none;
 }
 .def-result.is-success {
   background: #e3bd6b;
@@ -1663,7 +1670,6 @@ body {
   .unit { width: 38%; left: 8%; bottom: 3%; }
   .unit--B { right: 8%; left: auto; }
   .float-num { font-size: 20px; }
-  .def-word { font-size: 40px; }
   .action-banner { font-size: 11px; padding: 6px 10px; max-width: 96%; }
   .progress-hint, .log-note { display: none; }
   .progress-row { padding: 6px 8px 0; }
