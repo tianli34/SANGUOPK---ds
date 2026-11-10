@@ -16,3 +16,6 @@ env/
 # 操作系统
 .DS_Store
 Thumbs.db
+
+# 战场底图素材（约 68MB，不进版本库；缺失时网页回退为默认画面）
+battleField/

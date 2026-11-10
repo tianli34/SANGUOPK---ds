@@ -11,49 +11,23 @@ from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from src import SKILL_REGISTRY, WEAPON_REGISTRY, Warrior, BattleEngine, get_skill, get_weapon, get_default_map
+from src.backdrop import backdrop_root, pick_backdrop
 from src.battle_report import AggregateReporter, BattleReporter
 from src.event_exporter import build_battle_document, write_battle_json, write_battle_js
 from src.seed_history import SeedHistory, SeedRecord
-
-# 双方武将的默认配置
-DEFAULT_WARRIORS = {
-    "a": {
-        "name": "马超",
-        "martialarts": 96,
-        "agility": 98,
-        "strength": 91,
-        "courage": 90,
-        "sp": 95,
-        "skill": "none",
-        "weapon": "虎头湛金枪",
-    },
-    "b": {
-        "name": "许褚",
-        "martialarts": 91,
-        "agility": 88,
-        "strength": 99,
-        "courage": 91,
-        "sp": 99,
-        "skill": "none",
-        "weapon": "血煞虎头刀",
-    },
-}
+from src.warrior_data import (
+    DEFAULT_WARRIORS,
+    STAT_FIELDS,
+    STAT_LABELS,
+    WARRIOR_PRESETS,
+)
 
 SKILL_CHOICES = ["none", *sorted(SKILL_REGISTRY)]
 WEAPON_CHOICES = ["none", *sorted(WEAPON_REGISTRY)]
-
-STAT_FIELDS = ("martialarts", "agility", "strength", "courage", "sp")
-
-STAT_LABELS = {
-    "martialarts": "武艺",
-    "agility": "敏捷",
-    "strength": "力量",
-    "courage": "胆气",
-    "sp": "体力",
-}
+WARRIOR_CHOICES = sorted(WARRIOR_PRESETS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -100,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
     for side, defaults in DEFAULT_WARRIORS.items():
         prefix = side.upper()
         parser.add_argument(
+            f"--{side}-warrior",
+            default=None,
+            choices=WARRIOR_CHOICES,
+            help=(
+                f"{prefix}队名将预设（可选：{'、'.join(WARRIOR_CHOICES)}）；"
+                "指定后覆盖该侧名称、属性、特技与兵器"
+            ),
+        )
+        parser.add_argument(
             f"--{side}-name", default=defaults["name"], help=f"{prefix}队武将名"
         )
         for field in STAT_FIELDS:
@@ -126,18 +109,28 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def create_warrior(args: argparse.Namespace, side: str) -> Warrior:
-    """根据命令行参数创建武将并装备指定特技、兵器"""
-    weapon_name = getattr(args, f"{side}_weapon")
+    """根据命令行参数创建武将并装备指定特技、兵器
+
+    指定 --a-warrior / --b-warrior 时按名将预设整体创建，预设覆盖该侧的
+    名称、属性、特技与兵器；未指定时沿用原有的逐项参数。
+    """
+    preset_name = getattr(args, f"{side}_warrior", None)
+    if preset_name:
+        preset = WARRIOR_PRESETS[preset_name]
+        name = preset["name"]
+        stats = {field: preset[field] for field in STAT_FIELDS}
+        weapon_name = preset["weapon"]
+        skill_id = preset["skill"]
+    else:
+        name = getattr(args, f"{side}_name")
+        stats = {field: getattr(args, f"{side}_{field}") for field in STAT_FIELDS}
+        weapon_name = getattr(args, f"{side}_weapon")
+        skill_id = getattr(args, f"{side}_skill")
+
     weapon = None
     if weapon_name and weapon_name != "none":
         weapon = get_weapon(weapon_name)
-    warrior = Warrior(
-        getattr(args, f"{side}_name"),
-        side.upper(),
-        **{field: getattr(args, f"{side}_{field}") for field in STAT_FIELDS},
-        weapon=weapon,
-    )
-    skill_id = getattr(args, f"{side}_skill")
+    warrior = Warrior(name, side.upper(), **stats, weapon=weapon)
     if skill_id and skill_id != "none":
         warrior.equip_skill(get_skill(skill_id))
     return warrior
@@ -159,12 +152,15 @@ def build_random_document(args: argparse.Namespace) -> dict:
     """用随机种子现场模拟一场新战斗，返回网页可直接播放的事件文档"""
     seed = secrets.randbits(32)
     random.seed(seed)
+    backdrop = pick_backdrop()
     warrior_a = create_warrior(args, "a")
     warrior_b = create_warrior(args, "b")
     snapshot_a = warrior_a.snapshot()
     snapshot_b = warrior_b.snapshot()
     result = BattleEngine([warrior_a], [warrior_b], battle_map=get_default_map()).run()
-    return build_battle_document(result, [snapshot_a], [snapshot_b], seed=seed)
+    return build_battle_document(
+        result, [snapshot_a], [snapshot_b], seed=seed, backdrop=backdrop
+    )
 
 
 def serve_web(args: argparse.Namespace) -> None:
@@ -188,7 +184,31 @@ def serve_web(args: argparse.Namespace) -> None:
                     return
                 self._send_json(document)
                 return
+            if path.startswith("/battleField/"):
+                self._send_backdrop(path)
+                return
             super().do_GET()
+
+        def _send_backdrop(self, path: str) -> None:
+            """从项目 battleField 目录返回战场底图切片（web 服务根目录是 web/）"""
+            root = backdrop_root().resolve()
+            relative = unquote(path[len("/battleField/"):])
+            target = (root / relative).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError:
+                self.send_error(404)
+                return
+            if not target.is_file():
+                self.send_error(404)
+                return
+            body = target.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
 
         def _send_json(self, payload: dict, status: int = 200) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -262,8 +282,9 @@ def main() -> None:
         history.save()
 
         if args.export_json or args.export_web:
+            backdrop = pick_backdrop()
             document = build_battle_document(
-                result, [snapshot_a], [snapshot_b], seed=battle_seed
+                result, [snapshot_a], [snapshot_b], seed=battle_seed, backdrop=backdrop
             )
             if args.export_json:
                 path = write_battle_json(document, Path(args.export_json))

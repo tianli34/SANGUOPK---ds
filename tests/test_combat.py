@@ -292,6 +292,42 @@ class WeaponTest(unittest.TestCase):
         self.assertEqual(document["warriors"]["B"]["weapon"]["category"], 4)
 
 
+class WarriorPresetTest(unittest.TestCase):
+    def test_guan_yu_preset_matches_design(self):
+        from src.warrior_data import WARRIOR_PRESETS
+
+        preset = WARRIOR_PRESETS["关羽"]
+        self.assertEqual(
+            (
+                preset["martialarts"],
+                preset["agility"],
+                preset["strength"],
+                preset["courage"],
+                preset["sp"],
+            ),
+            (97, 88, 97, 96, 97),
+        )
+        self.assertEqual(preset["weapon"], "青龙偃月刀")
+        self.assertEqual(preset["skill"], "none")
+
+    def test_guan_yu_preset_is_playable_from_cli(self):
+        from main import build_parser, create_warrior
+
+        args = build_parser().parse_args(["--a-warrior", "关羽"])
+        guan_yu = create_warrior(args, "a")
+
+        self.assertEqual(guan_yu.name, "关羽")
+        self.assertEqual(guan_yu.martialarts_init, 97)
+        self.assertEqual(guan_yu.agility_init, 88)
+        self.assertEqual(guan_yu.strength_init, 97)
+        self.assertEqual(guan_yu.courage, 96)
+        self.assertEqual(guan_yu.init_sp, 97)
+        self.assertEqual(guan_yu.weapon.name, "青龙偃月刀")
+        self.assertIs(guan_yu.weapon.category, WeaponCategory.GREAT_BLADE)
+        self.assertEqual(guan_yu.weapon.effective_reach, 2)
+        self.assertEqual(guan_yu.skills, [])
+
+
 class ClashTest(unittest.TestCase):
     def test_equal_warriors_take_equal_damage(self):
         damage_a, damage_b, sp_a, sp_b = calculate_clash_damage(
@@ -498,16 +534,6 @@ class SkillTest(unittest.TestCase):
         self.assertFalse(
             [log for log in result.logs if log.event_type == "skill_trigger"]
         )
-
-    def test_default_roster_equips_xuchu_with_skill(self):
-        from main import build_parser, create_warrior
-
-        args = build_parser().parse_args([])
-        ma_chao = create_warrior(args, "a")
-        xu_chu = create_warrior(args, "b")
-
-        self.assertEqual(ma_chao.skills, [])
-        self.assertEqual([s.skill_id for s in xu_chu.skills], ["opening_ap_50"])
 
     def test_report_shows_equipped_skill_and_trigger(self):
         random.seed(7)

@@ -24,4 +24,5 @@ class Terrain(Enum):
     """地形类型"""
 
     PLAIN = "plain"  # 平地（可通行）
-    ROCK = "rock"  # 岩石（不可通行，阻挡视线）
+    ROCK = "rock"  # 岩石（不可通行，阻挡视线，绘制石块）
+    BOUNDARY = "boundary"  # 禁行边界（不可通行，阻挡视线，不绘制）

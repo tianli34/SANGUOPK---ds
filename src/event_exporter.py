@@ -128,6 +128,7 @@ def build_battle_document(
     snapshots_a: List[WarriorSnapshot],
     snapshots_b: List[WarriorSnapshot],
     seed: Optional[int] = None,
+    backdrop: Optional[dict] = None,
 ) -> dict:
     """构建网页消费的完整战斗文档"""
     snapshot_a = snapshots_a[0]
@@ -264,6 +265,8 @@ def build_battle_document(
     }
     if battle_map is not None:
         document["map"] = battle_map.to_dict()
+        if backdrop:
+            document["map"]["backdrop"] = backdrop
     return document
 
 

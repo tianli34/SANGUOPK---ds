@@ -36,6 +36,19 @@
       plume: "#b23a2e",
       skin: "#d8b183",
     },
+    关羽: {
+      weapon: "guandao",
+      horse: "#8a3b2e",
+      horseDark: "#5c241c",
+      mane: "#241110",
+      armor: "#2f6b4d",
+      armorDark: "#1f4a35",
+      metal: "#d9c27a",
+      metalDark: "#8f7534",
+      accent: "#a8322b",
+      plume: "#c0392b",
+      skin: "#c98a6a",
+    },
   };
 
   const FALLBACK_PALETTES = [
@@ -67,6 +80,9 @@
     },
   ];
 
+  /* 精灵图数据由 tools/build_sprite.py 生成，按武将名称索引 */
+  const SPRITES = window.WarriorSprites || {};
+
   function escapeAttr(value) {
     return String(value).replace(/[&<>"']/g, (ch) => {
       const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -86,6 +102,155 @@
     if (PRESETS[name]) return { ...PRESETS[name], name };
     const base = FALLBACK_PALETTES[hashName(name) % FALLBACK_PALETTES.length];
     return { ...base, name };
+  }
+
+  function hasSprite(name) {
+    return Boolean(SPRITES[name]);
+  }
+
+  const spriteStyles = new Set();
+
+  /* 图集只有 1/5/6/7/8 五个朝向：左半边由右侧条带镜像得到 */
+  const FACING_DIRS = {
+    r: "7",
+    ur: "6",
+    u: "5",
+    dr: "8",
+    d: "1",
+    l: "7",
+    ul: "6",
+    dl: "8",
+  };
+  const FACINGS = ["r", "ur", "u", "dr", "d", "l", "ul", "dl"];
+
+  /**
+   * 每个武将的动作条带宽度、步进数与时长都不同，按需注入一组 CSS 动画：
+   * 循环动作用 steps(N) 走到 -100%；一次性动作停在最后一帧，配合 forwards。
+   * data-facing 由 scene.js 按相对方位设置，未设置时退回朝右条带。
+   */
+  function ensureSpriteStyles(name) {
+    const sprite = SPRITES[name];
+    if (!sprite || spriteStyles.has(sprite.slug)) return sprite;
+    spriteStyles.add(sprite.slug);
+
+    const sel = `[data-sprite="${sprite.slug}"]`;
+    const dirs = sprite.dirs || {};
+    const fallbackKey = dirs["7"] ? "7" : Object.keys(dirs)[0];
+    const fallback = dirs[fallbackKey];
+    if (!fallback) return sprite;
+
+    const holdOffset = (frames) => (((frames - 1) / frames) * 100).toFixed(4);
+    const holdName = (dir, action) => `sprite-hold-${sprite.slug}-${dir}-${action}`;
+
+    const keyframes = Object.keys(dirs)
+      .map((dir) => {
+        const { attack, stuck, die } = dirs[dir];
+        return `
+          @keyframes ${holdName(dir, "attack")} {
+            from { transform: translateX(0); }
+            to { transform: translateX(-${holdOffset(attack.frames)}%); }
+          }
+          @keyframes ${holdName(dir, "stuck")} {
+            from { transform: translateX(0); }
+            to { transform: translateX(-${holdOffset(stuck.frames)}%); }
+          }
+          @keyframes ${holdName(dir, "die")} {
+            from { transform: translateX(0); }
+            to { transform: translateX(-${holdOffset(die.frames)}%); }
+          }`;
+      })
+      .join("");
+
+    const idleCss = (group) => `
+        width: ${group.frames * 100}%;
+        background-image: url("${group.src}");
+        animation: sprite-slide ${group.frames * group.ms}ms steps(${group.frames}, end) infinite;`;
+
+    const rules = FACINGS.map((facing) => {
+      const dir = FACING_DIRS[facing];
+      const group = dirs[dir] || fallback;
+      const { idle, run, attack, stuck, die } = group;
+      return `
+        .unit[data-facing="${facing}"] ${sel} .sprite-strip {${idleCss(idle)}
+        }
+        .unit.moving[data-facing="${facing}"] ${sel} .sprite-strip {
+          background-image: url("${run.src}");
+          width: ${run.frames * 100}%;
+          animation: sprite-slide calc(${run.frames * run.ms}ms * var(--beat)) steps(${run.frames}, end) infinite;
+        }
+        .unit.attacking[data-facing="${facing}"] ${sel} .sprite-strip,
+        .unit.countering[data-facing="${facing}"] ${sel} .sprite-strip {
+          background-image: url("${attack.src}");
+          width: ${attack.frames * 100}%;
+          animation: ${holdName(dir, "attack")} calc(${attack.frames * attack.ms}ms * var(--beat)) steps(${attack.frames - 1}, end) forwards;
+        }
+        .unit.hit[data-facing="${facing}"] ${sel} .sprite-strip {
+          background-image: url("${stuck.src}");
+          width: ${stuck.frames * 100}%;
+          animation: ${holdName(dir, "stuck")} calc(${stuck.frames * stuck.ms}ms * var(--beat)) steps(${stuck.frames - 1}, end) forwards;
+        }
+        .unit.fallen[data-facing="${facing}"] ${sel} .sprite-strip {
+          background-image: url("${die.src}");
+          width: ${die.frames * 100}%;
+          animation: ${holdName(dir, "die")} calc(${die.frames * die.ms}ms * var(--beat)) steps(${die.frames - 1}, end) forwards;
+        }
+        .unit.fallen-instant[data-facing="${facing}"] ${sel} .sprite-strip {
+          background-image: url("${die.src}");
+          width: ${die.frames * 100}%;
+          animation: none;
+          transform: translateX(-${holdOffset(die.frames)}%);
+        }`;
+    }).join("");
+
+    const baseIdle = fallback.idle;
+
+    const baseRules = `
+      .unit.moving ${sel} .sprite-strip {
+        background-image: url("${fallback.run.src}");
+        width: ${fallback.run.frames * 100}%;
+        animation: sprite-slide calc(${fallback.run.frames * fallback.run.ms}ms * var(--beat)) steps(${fallback.run.frames}, end) infinite;
+      }
+      .unit.attacking ${sel} .sprite-strip,
+      .unit.countering ${sel} .sprite-strip {
+        background-image: url("${fallback.attack.src}");
+        width: ${fallback.attack.frames * 100}%;
+        animation: ${holdName(fallbackKey, "attack")} calc(${fallback.attack.frames * fallback.attack.ms}ms * var(--beat)) steps(${fallback.attack.frames - 1}, end) forwards;
+      }
+      .unit.hit ${sel} .sprite-strip {
+        background-image: url("${fallback.stuck.src}");
+        width: ${fallback.stuck.frames * 100}%;
+        animation: ${holdName(fallbackKey, "stuck")} calc(${fallback.stuck.frames * fallback.stuck.ms}ms * var(--beat)) steps(${fallback.stuck.frames - 1}, end) forwards;
+      }
+      .unit.fallen ${sel} .sprite-strip {
+        background-image: url("${fallback.die.src}");
+        width: ${fallback.die.frames * 100}%;
+        animation: ${holdName(fallbackKey, "die")} calc(${fallback.die.frames * fallback.die.ms}ms * var(--beat)) steps(${fallback.die.frames - 1}, end) forwards;
+      }
+      .unit.fallen-instant ${sel} .sprite-strip {
+        background-image: url("${fallback.die.src}");
+        width: ${fallback.die.frames * 100}%;
+        animation: none;
+        transform: translateX(-${holdOffset(fallback.die.frames)}%);
+      }`;
+
+    const css = `
+      @keyframes sprite-slide {
+        from { transform: translateX(0); }
+        to { transform: translateX(-100%); }
+      }
+      ${keyframes}
+      ${sel} .sprite-viewport { aspect-ratio: ${sprite.cell[0]} / ${sprite.cell[1]}; }
+      ${sel} .sprite-strip {${idleCss(baseIdle)}
+      }
+      ${baseRules}
+      ${rules}
+    `;
+
+    const style = document.createElement("style");
+    style.id = `sprite-style-${sprite.slug}`;
+    style.textContent = css;
+    document.head.appendChild(style);
+    return sprite;
   }
 
   function cssVars(style) {
@@ -124,8 +289,34 @@
     `;
   }
 
+  function guandao() {
+    return `
+      <line x1="88" y1="202" x2="330" y2="42" stroke="#5d442c" stroke-width="8" stroke-linecap="round" />
+      <line x1="100" y1="194" x2="322" y2="48" stroke="#a37a45" stroke-width="2" stroke-linecap="round" opacity=".65" />
+      <path d="M310 36 C338 22 366 34 376 58 C382 70 378 84 368 94 C360 78 346 66 328 60 C318 57 310 48 310 36 Z" fill="var(--metal)" stroke="var(--metal-dark)" stroke-width="2" />
+      <path d="M318 48 C340 40 358 46 366 62" fill="none" stroke="var(--metal-dark)" stroke-width="2" opacity=".8" />
+      <path d="M306 84 C316 78 324 84 326 94 C316 90 308 92 302 98 C302 90 302 86 306 84 Z" fill="var(--plume)" opacity=".9" />
+      <circle cx="210" cy="120" r="6" fill="var(--metal-dark)" />
+    `;
+  }
+
+  function createSpriteRider(style) {
+    const sprite = ensureSpriteStyles(style.name);
+    return `
+      <div class="sprite-rider" data-sprite="${escapeAttr(sprite.slug)}">
+        <div class="sprite-viewport"><div class="sprite-strip"></div></div>
+      </div>
+    `;
+  }
+
   function createRider(style) {
-    const weapon = style.weapon === "cleaver" ? cleaver() : spear();
+    if (hasSprite(style.name)) return createSpriteRider(style);
+    const weapon =
+      style.weapon === "cleaver"
+        ? cleaver()
+        : style.weapon === "guandao"
+        ? guandao()
+        : spear();
     return `
       <svg class="rider-svg" viewBox="0 0 420 280" role="img" aria-label="${escapeAttr(style.name)}立绘">
         <g class="horse-figure">
@@ -180,6 +371,10 @@
   }
 
   function createPortrait(style) {
+    const sprite = SPRITES[style.name];
+    if (sprite && sprite.portrait) {
+      return `<img class="sprite-portrait" src="${escapeAttr(sprite.portrait)}" alt="${escapeAttr(style.name)}头像" />`;
+    }
     const gradId = `portrait-grad-${hashName(style.name)}`;
     return `
       <svg viewBox="0 0 100 100" role="img" aria-label="${escapeAttr(style.name)}头像">
@@ -203,5 +398,5 @@
     `;
   }
 
-  window.WarriorArt = { resolveStyle, createRider, createPortrait, cssVars };
+  window.WarriorArt = { resolveStyle, createRider, createPortrait, cssVars, hasSprite };
 })();

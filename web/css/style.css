@@ -142,6 +142,15 @@ body {
 
 .portrait svg { width: 100%; height: 100%; display: block; }
 
+.portrait img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.fighter--b .portrait img { transform: scaleX(-1); }
+
 .fighter-body {
   flex: 1;
   min-width: 0;
@@ -555,6 +564,17 @@ body {
 
 /* ============ 演武场网格（地图模式） ============ */
 
+/* 战场底图：素材切片在 canvas 中拼合，按舞台 cover 适配 */
+.map-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+.map-backdrop[hidden] { display: none; }
+
 .map-grid {
   position: absolute;
   inset: 0;
@@ -566,7 +586,6 @@ body {
 
 .map-cell {
   position: relative;
-  border: 1px solid rgba(216, 183, 108, 0.1);
 }
 
 .map-cell.is-rock::before {
@@ -693,13 +712,41 @@ body {
   z-index: -1;
 }
 
+/* ============ 精灵图骑将 ============ */
+
+.sprite-rider { width: 100%; }
+
+.sprite-viewport {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+
+.sprite-strip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  will-change: transform;
+}
+
+.unit.has-sprite {
+  width: 40%;
+  filter: drop-shadow(0 16px 12px rgba(0, 0, 0, 0.36));
+}
+.unit.has-sprite .unit-shadow { display: none; }
+.stage:not(.has-map) .unit.has-sprite.unit--A { left: 11%; }
+.stage:not(.has-map) .unit.has-sprite.unit--B { right: 11%; }
+.stage.has-map .unit.has-sprite { width: calc(var(--arena-h) * 0.32); }
 .unit.attacking .unit-inner { animation: lunge calc(0.66s * var(--beat)) cubic-bezier(0.18, 0.8, 0.3, 1); }
 .unit.attacking .weapon { animation: weapon-strike calc(0.66s * var(--beat)) cubic-bezier(0.3, 0.7, 0.3, 1); }
 
 @keyframes lunge {
   0% { transform: translateX(0); }
-  32% { transform: translateX(calc(78px * var(--dir))) translateY(-5px); }
-  52% { transform: translateX(calc(64px * var(--dir))) translateY(0); }
+  32% { transform: translateX(calc(39px * var(--dir))) translateY(-5px); }
+  52% { transform: translateX(calc(32px * var(--dir))) translateY(0); }
   100% { transform: translateX(0); }
 }
 

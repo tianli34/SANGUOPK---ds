@@ -16,6 +16,11 @@
     counter: "countering",
   };
   const DEFENSE_VERB = { block: "格挡", parry: "招架", dodge: "闪避", counter: "反击" };
+  const STAGGER_DAMAGE_RATIO = 0.005;
+
+  /* atan2 每 45° 一档，与图集 1/5/6/7/8 朝向条带对应；左半边镜像右侧条带 */
+  const FACING_SECTORS = ["r", "dr", "d", "dl", "l", "ul", "u", "ur"];
+  const FACING_MIRRORED = new Set(["l", "ul", "dl"]);
 
   class Scene {
     constructor() {
@@ -40,9 +45,18 @@
       this.warriors = null;
       this.map = null;
       this.mapGrid = document.getElementById("map-grid");
+      this.backdrop = document.getElementById("map-backdrop");
+      this.backdropSpec = null;
+      this.backdropTiles = [];
+      this.backdropSeq = 0;
       this.cells = [];
       this.positions = { A: null, B: null };
+      this.clampY = { A: 0, B: 0 };
       this.rangeOn = false;
+      window.addEventListener("resize", () => {
+        this.measureSpriteClamp();
+        this.drawBackdrop();
+      });
     }
 
     init(doc) {
@@ -59,6 +73,12 @@
 
       this.units.A.style.cssText = window.WarriorArt.cssVars(styleA);
       this.units.B.style.cssText = window.WarriorArt.cssVars(styleB);
+      ["A", "B"].forEach((side) => {
+        this.units[side].classList.toggle(
+          "has-sprite",
+          window.WarriorArt.hasSprite(doc.warriors[side].name)
+        );
+      });
 
       this.setupMap(doc);
       this.spawnDust();
@@ -75,24 +95,28 @@
       this.stage.classList.toggle("has-map", Boolean(this.map));
       document.getElementById("btn-range").hidden = !this.map;
       ["A", "B"].forEach((side) => this.units[side].classList.remove("face-left"));
+      this.setBackdrop(this.map && this.map.backdrop);
       if (!this.map) {
         this.mapGrid.hidden = true;
         this.positions = { A: null, B: null };
+        ["A", "B"].forEach((side) => delete this.units[side].dataset.facing);
         return;
       }
       this.mapGrid.hidden = false;
       this.mapGrid.style.gridTemplateColumns = `repeat(${this.map.width}, 1fr)`;
       this.mapGrid.style.gridTemplateRows = `repeat(${this.map.height}, 1fr)`;
-      const rocks = new Set(this.map.obstacles.map(([x, y]) => `${x},${y}`));
+      const blocked = new Set(this.map.obstacles.map(([x, y]) => `${x},${y}`));
+      const rocks = new Set((this.map.rocks || []).map(([x, y]) => `${x},${y}`));
       for (let y = 0; y < this.map.height; y += 1) {
         for (let x = 0; x < this.map.width; x += 1) {
           const cell = document.createElement("div");
           cell.className = "map-cell";
           if (rocks.has(`${x},${y}`)) cell.classList.add("is-rock");
           this.mapGrid.appendChild(cell);
-          this.cells.push({ x, y, el: cell, rock: rocks.has(`${x},${y}`) });
+          this.cells.push({ x, y, el: cell, blocked: blocked.has(`${x},${y}`) });
         }
       }
+      this.measureSpriteClamp();
       ["A", "B"].forEach((side) => {
         const spawn = this.map.spawns[side];
         this.positions[side] = { x: spawn[0], y: spawn[1] };
@@ -102,11 +126,105 @@
       this.updateRange();
     }
 
+    /* ---------------- 战场底图（battleField 切片） ---------------- */
+
+    /** 加载并拼合底图切片；没有素材时隐藏 canvas，保留原有画面 */
+    setBackdrop(spec) {
+      this.backdropSpec = spec || null;
+      this.backdropTiles = [];
+      this.backdropSource = null;
+      const seq = ++this.backdropSeq;
+      if (!this.backdropSpec || !Array.isArray(this.backdropSpec.tiles) || !this.backdropSpec.tiles.length) {
+        this.backdrop.hidden = true;
+        this.backdrop.width = 0;
+        this.backdrop.height = 0;
+        return;
+      }
+      this.backdrop.hidden = false;
+      const loads = this.backdropSpec.tiles.map(
+        (tile) =>
+          new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve({ tile, img });
+            img.onerror = () => resolve(null);
+            img.src = tile.src;
+          })
+      );
+      Promise.all(loads).then((loaded) => {
+        if (seq !== this.backdropSeq) return;
+        this.backdropTiles = loaded.filter(Boolean);
+        if (!this.backdropTiles.length) {
+          this.backdrop.hidden = true;
+          return;
+        }
+        this.composeBackdrop();
+        this.drawBackdrop();
+      });
+    }
+
+    /** 先在原始分辨率上无缝拼合；逐块缩放会让切片边缘混入透明背景，出现细线 */
+    composeBackdrop() {
+      const spec = this.backdropSpec;
+      const source = document.createElement("canvas");
+      source.width = spec.width;
+      source.height = spec.height;
+      const ctx = source.getContext("2d");
+      if (!ctx) return;
+      this.backdropTiles.forEach(({ tile, img }) => {
+        ctx.drawImage(img, tile.x, tile.y, tile.w, tile.h);
+      });
+      this.backdropSource = source;
+    }
+
+    /** cover 适配：等比铺满舞台并居中裁切，整图一次缩放 */
+    drawBackdrop() {
+      const spec = this.backdropSpec;
+      if (!spec || !this.backdropSource) return;
+      const rect = this.stage.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.round(rect.width * dpr));
+      const height = Math.max(1, Math.round(rect.height * dpr));
+      const canvas = this.backdrop;
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      const scale = Math.max(width / spec.width, height / spec.height);
+      const drawWidth = spec.width * scale;
+      const drawHeight = spec.height * scale;
+      ctx.drawImage(this.backdropSource, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+      ctx.fillStyle = "rgba(8, 12, 16, 0.16)";
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    /** 精灵单位比格子高，贴上下边缘时留出半个身位，避免头部被舞台裁掉 */
+    measureSpriteClamp() {
+      const stageH = this.stage.clientHeight;
+      ["A", "B"].forEach((side) => {
+        const unit = this.units[side];
+        const half =
+          stageH && unit.classList.contains("has-sprite")
+            ? (unit.offsetHeight / 2 / stageH) * 100
+            : 0;
+        this.clampY[side] = half;
+      });
+    }
+
     /** 把单位锚定到格子中心（坐标可为小数，用于移动插值） */
     placeUnit(side, x, y) {
       const unit = this.units[side];
       unit.style.left = `${((x + 0.5) / this.map.width) * 100}%`;
-      unit.style.top = `${((y + 0.5) / this.map.height) * 100}%`;
+      const half = this.clampY[side];
+      const rawTop = ((y + 0.5) / this.map.height) * 100;
+      const top = half ? Math.min(Math.max(rawTop, half), 100 - half) : rawTop;
+      unit.style.top = `${top}%`;
       unit.style.zIndex = String(10 + Math.round(y));
     }
 
@@ -123,16 +241,21 @@
       return this.units[side].classList.contains("face-left") ? -1 : 1;
     }
 
-    /** 朝向动态化：始终面向对手，同列时保持默认朝向 */
+    /** 朝向动态化：按相对方位（含上下）选择八方向条带，左半边镜像 */
     updateFacing() {
       if (!this.map || !this.positions.A || !this.positions.B) return;
       ["A", "B"].forEach((side) => {
         const other = side === "A" ? "B" : "A";
         const dx = this.positions[other].x - this.positions[side].x;
-        const dir = dx === 0 ? (side === "A" ? 1 : -1) : Math.sign(dx);
+        const dy = this.positions[other].y - this.positions[side].y;
+        if (dx === 0 && dy === 0) return;
+        const sector = Math.round(Math.atan2(dy, dx) / (Math.PI / 4));
+        const facing = FACING_SECTORS[(sector + 8) % 8];
+        const mirrored = FACING_MIRRORED.has(facing);
         const unit = this.units[side];
-        unit.style.setProperty("--dir", String(dir));
-        unit.classList.toggle("face-left", dir === -1);
+        unit.dataset.facing = facing;
+        unit.style.setProperty("--dir", mirrored ? "-1" : "1");
+        unit.classList.toggle("face-left", mirrored);
       });
     }
 
@@ -153,7 +276,7 @@
         const weapon = this.warriors[side].weapon;
         const reach = (weapon && weapon.reach) || 1;
         this.cells.forEach((cell) => {
-          if (cell.rock) return;
+          if (cell.blocked) return;
           const dist = Math.max(Math.abs(cell.x - pos.x), Math.abs(cell.y - pos.y));
           if (dist <= reach) cell.el.classList.add(side === "A" ? "in-range-a" : "in-range-b");
         });
@@ -186,6 +309,8 @@
       const side = ev.move.side;
       const from = ev.move.from;
       const to = ev.move.to;
+      const unit = this.units[side];
+      unit.classList.add("moving");
       const ok = await this.tween(240, (t) => {
         const x = from[0] + (to[0] - from[0]) * t;
         const y = from[1] + (to[1] - from[1]) * t;
@@ -193,6 +318,7 @@
         this.placeUnit(side, x, y);
         this.updateFacing();
       }, gen);
+      unit.classList.remove("moving");
       if (!ok || gen !== this.generation) return;
       this.positions[side] = { x: to[0], y: to[1] };
       this.placeUnit(side, to[0], to[1]);
@@ -269,6 +395,7 @@
         POSES.forEach((pose) => unit.classList.remove(pose));
         unit.classList.remove("fallen");
         unit.classList.remove("fallen-instant");
+        unit.classList.remove("moving");
       });
     }
 
@@ -301,6 +428,21 @@
       const ok = await this.wait(this.ms(baseMs));
       unit.classList.remove(className);
       return ok;
+    }
+
+    /** 单次受伤超过最大体力 0.5% 才进入受击硬直，避免擦伤也打断动作 */
+    isStaggered(ev, side) {
+      const fx = ev.effects && ev.effects[side];
+      const warrior = this.warriors && this.warriors[side];
+      if (!fx || !warrior || fx.hp >= 0) return false;
+      return -fx.hp > warrior.hpMax * STAGGER_DAMAGE_RATIO;
+    }
+
+    /** 受击硬直：打断攻击/反击，播放武将的 stuck 硬直帧 */
+    stagger(side) {
+      const unit = this.units[side];
+      unit.classList.remove("attacking", "countering");
+      return this.pose(side, "hit", 420);
     }
 
     async both(promises) {
@@ -410,9 +552,7 @@
       const hits = [];
       [def, atk].forEach((side) => {
         if (!ev.alive[side]) return;
-        if (ev.effects[side] && ev.effects[side].hp < -0.5) {
-          hits.push(this.pose(side, "hit", 420));
-        }
+        if (this.isStaggered(ev, side)) hits.push(this.stagger(side));
       });
 
       await this.reactToDeaths(ev, beforeState);
@@ -440,8 +580,13 @@
       this.shake();
       if (onImpact) onImpact();
       this.spawnFloating(ev);
+      const hits = [];
+      ["A", "B"].forEach((side) => {
+        if (!ev.alive[side]) return;
+        if (this.isStaggered(ev, side)) hits.push(this.stagger(side));
+      });
       await this.reactToDeaths(ev, beforeState);
-      await this.both([aPose, bPose]);
+      await this.both([aPose, bPose, ...hits]);
     }
 
     async leaderChange(ev, gen) {

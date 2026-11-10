@@ -26,6 +26,12 @@ from src.map import (
     chebyshev_distance,
 )
 from src.enums import DefenseType, Terrain
+from src.warrior_data import (
+    DEFAULT_WARRIORS,
+    WARRIOR_PRESETS,
+    STAT_FIELDS,
+    STAT_LABELS,
+)
 from src.constants import (
     BACKSWING_BAR,
     TICK_RATE,
@@ -69,6 +75,10 @@ __all__ = [
     "register_map",
     "chebyshev_distance",
     "Terrain",
+    "DEFAULT_WARRIORS",
+    "WARRIOR_PRESETS",
+    "STAT_FIELDS",
+    "STAT_LABELS",
     "BACKSWING_BAR",
     "TICK_RATE",
     "CLASH_AP_THRESHOLD",

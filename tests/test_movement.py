@@ -69,27 +69,35 @@ class MapTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             get_map("不存在的地图")
 
-    def test_obstacles_rotationally_symmetric(self):
+    def test_builtin_layout_matches_design(self):
         battle_map = get_default_map()
-        cx, cy = (battle_map.width - 1) / 2, (battle_map.height - 1) / 2
-        self.assertEqual((cx, cy), (6, 3))
-        for x, y in battle_map.obstacles:
-            self.assertIn((2 * cx - x, 2 * cy - y), battle_map.obstacles)
-        self.assertIn((6, 3), battle_map.obstacles)
+        expected = {(x, 0) for x in range(13)}
+        expected |= {(x, 1) for x in range(4)}
+        expected |= {(0, 2), (0, 3), (12, 3)}
+        expected |= {(11, 4), (12, 4)}
+        expected |= {(x, 5) for x in range(10, 13)}
+        expected |= {(x, 6) for x in range(10, 13)}
+        self.assertEqual(battle_map.obstacles, frozenset(expected))
+        self.assertEqual(battle_map.rocks, frozenset())
+        for cell in expected:
+            self.assertFalse(battle_map.is_walkable(cell))
+        self.assertTrue(battle_map.is_walkable((6, 3)))
         self.assertFalse(battle_map.in_bounds((-1, 0)))
-        self.assertFalse(battle_map.is_walkable((6, 3)))
 
     def test_chebyshev_distance(self):
         self.assertEqual(chebyshev_distance((2, 3), (10, 3)), 8)
         self.assertEqual(chebyshev_distance((0, 0), (3, 5)), 5)
         self.assertEqual(chebyshev_distance((4, 4), (4, 4)), 0)
 
-    def test_line_of_sight_blocked_by_wall(self):
+    def test_line_of_sight_follows_terrain(self):
         battle_map = get_default_map()
-        self.assertFalse(battle_map.has_line_of_sight((2, 3), (10, 3)))
+        self.assertTrue(battle_map.has_line_of_sight((2, 3), (10, 3)))
         self.assertTrue(battle_map.has_line_of_sight((2, 3), (5, 3)))
-        self.assertFalse(battle_map.has_line_of_sight((6, 0), (6, 6)))
-        self.assertTrue(battle_map.has_line_of_sight((0, 0), (1, 1)))
+        wall = BattleMap.from_rows(
+            "石墙", [".....", "..#..", "....."], spawns=((0, 0), (4, 2))
+        )
+        self.assertFalse(wall.has_line_of_sight((2, 0), (2, 2)))
+        self.assertTrue(wall.has_line_of_sight((0, 0), (1, 1)))
         self.assertEqual(
             bresenham_cells((0, 0), (3, 0)), [(0, 0), (1, 0), (2, 0), (3, 0)]
         )
@@ -117,7 +125,7 @@ class PathfindingTest(unittest.TestCase):
     def test_path_valid_and_deterministic(self):
         battle_map = get_default_map()
         path = battle_map.find_path((2, 3), (10, 3))
-        self.assertGreater(len(path), 8)
+        self.assertEqual(len(path), 8)
         self.assertEqual(path[-1], (10, 3))
         self.assert_valid_path(battle_map, (2, 3), path, set())
         self.assertEqual(path, battle_map.find_path((2, 3), (10, 3)))
@@ -311,7 +319,8 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(doc["map"]["name"], "演武场")
         self.assertEqual((doc["map"]["width"], doc["map"]["height"]), (13, 7))
         self.assertEqual(doc["map"]["spawns"], {"A": [2, 3], "B": [10, 3]})
-        self.assertIn([6, 3], doc["map"]["obstacles"])
+        self.assertIn([0, 1], doc["map"]["obstacles"])
+        self.assertEqual(doc["map"]["rocks"], [])
 
         moves = [e for e in doc["events"] if e["type"] == "move"]
         self.assertTrue(moves)

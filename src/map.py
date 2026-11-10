@@ -21,7 +21,7 @@ _DIRECTIONS: Tuple[Cell, ...] = (
     (-1, 1), (0, 1), (1, 1),
 )
 
-_TERRAIN_BY_CHAR = {".": Terrain.PLAIN, "#": Terrain.ROCK}
+_TERRAIN_BY_CHAR = {".": Terrain.PLAIN, "#": Terrain.ROCK, "x": Terrain.BOUNDARY}
 
 
 def chebyshev_distance(a: Cell, b: Cell) -> int:
@@ -65,7 +65,7 @@ class BattleMap:
     def from_rows(
         cls, name: str, rows: List[str], spawns: Tuple[Cell, Cell]
     ) -> "BattleMap":
-        """从字符行构建地图：'.' 平地，'#' 岩石"""
+        """从字符行构建地图：'.' 平地，'#' 岩石，'x' 不可见禁行边界"""
         grid = tuple(tuple(_TERRAIN_BY_CHAR[ch] for ch in row) for row in rows)
         if not grid or any(len(row) != len(grid[0]) for row in grid):
             raise ValueError(f"地图 {name} 的行宽不一致")
@@ -90,6 +90,16 @@ class BattleMap:
             for y, row in enumerate(self.grid)
             for x, terrain in enumerate(row)
             if terrain is not Terrain.PLAIN
+        )
+
+    @property
+    def rocks(self) -> FrozenSet[Cell]:
+        """需要绘制石块的格子；禁行边界不在此列"""
+        return frozenset(
+            (x, y)
+            for y, row in enumerate(self.grid)
+            for x, terrain in enumerate(row)
+            if terrain is Terrain.ROCK
         )
 
     def spawn(self, side: str) -> Cell:
@@ -213,6 +223,7 @@ class BattleMap:
             "height": self.height,
             "spawns": {"A": list(self.spawn_a), "B": list(self.spawn_b)},
             "obstacles": sorted([x, y] for x, y in self.obstacles),
+            "rocks": sorted([x, y] for x, y in self.rocks),
         }
 
 
@@ -238,18 +249,18 @@ def get_default_map() -> BattleMap:
     return MAP_REGISTRY[DEFAULT_MAP_NAME]
 
 
-# 13×7 演武场：中央岩墙 + 散石，绕中心 (6,3) 旋转对称
+# 13×7 演武场：顶部整行禁行，左上与右下为不可见边界（坐标按 1 基书写，内部 0 基存储）
 register_map(
     BattleMap.from_rows(
         DEFAULT_MAP_NAME,
         [
-            ".............",
-            "......#......",
-            "...#..#......",
-            "......#......",
-            "......#..#...",
-            "......#......",
-            ".............",
+            "xxxxxxxxxxxxx",
+            "xxxx.........",
+            "x............",
+            "x...........x",
+            "...........xx",
+            "..........xxx",
+            "..........xxx",
         ],
         spawns=((2, 3), (10, 3)),
     )
