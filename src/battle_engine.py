@@ -2,12 +2,19 @@
 # 用途: 战斗引擎核心模块，负责管理战斗流程、回合控制、攻击判定和战斗结果输出
 """武将对决系统的战斗引擎"""
 
+import math
 from dataclasses import dataclass, field
 from typing import List, Optional
 from enum import Enum
 
-from src.constants import TICK_RATE, MAX_ROUNDS, MAX_TICKS
-from src.map import BattleMap, chebyshev_distance
+from src.constants import (
+    MAX_ROUNDS,
+    MAX_TICKS,
+    TICK_RATE,
+    UNIT_RADIUS,
+    UNIT_SEPARATION,
+)
+from src.map import BattleMap, cell_at, cell_center, chebyshev_distance
 from src.warrior import Warrior
 from src.defense import process_defense
 from src.damage import calculate_final_damage
@@ -77,6 +84,13 @@ class BattleEngine:
         self.sp_leader_changes = []  # 体力领先者变更历史 [(round_num, leader)]
         self.hp_leader = None  # 当前生命领先者（"A" 或 "B"）
         self.leader_history = []  # 每回合结束时的 HP/SP 领先快照
+        # 实时操控覆盖项：武将名 -> {"mode": auto/manual, "move": 方向或None, "attack": 攻击意图}
+        # 缺省为空字典，行为与纯 AI 模拟完全一致
+        self.overrides: dict = {}
+        # 连续移动的事件记账：一次移动段从何处开始、手动方向与所在格是否变化
+        self._move_origin: dict = {}
+        self._manual_dir: dict = {}
+        self._move_cell: dict = {}
 
         self._validate_teams()
 
@@ -332,17 +346,32 @@ class BattleEngine:
                 leader_history=self.leader_history,
             )
 
+    def _log_skill_effect(self, skill, warrior: Warrior, effect) -> None:
+        """把特技发动结果写入战报"""
+        if effect is None:
+            return
+        details = dict(effect.details)
+        details.setdefault("skill_id", skill.skill_id)
+        details.setdefault("skill", skill.name)
+        details.setdefault("category", skill.category)
+        details.setdefault("warrior", warrior.name)
+        self._log("skill_trigger", effect.description, **details)
+
     def _apply_battle_start_skills(self) -> None:
-        """第 1 回合首次行动前触发所有已装备特技，并把生效结果写入战报"""
+        """第 1 回合首次行动前触发所有开启的特技"""
         for warrior in self.all_warriors:
-            for skill in warrior.skills:
+            for skill in warrior.active_skills:
                 effect = skill.on_battle_start(warrior, self)
-                if effect is None:
-                    continue
-                details = dict(effect.details)
-                details.setdefault("skill", skill.name)
-                details.setdefault("warrior", warrior.name)
-                self._log("skill_trigger", effect.description, **details)
+                self._log_skill_effect(skill, warrior, effect)
+
+    def _apply_round_start_skills(self) -> None:
+        """每个回合开始时触发所有开启的特技（含第 1 回合）"""
+        for warrior in self.all_warriors:
+            if not warrior.is_alive:
+                continue
+            for skill in warrior.active_skills:
+                effect = skill.on_round_start(warrior, self, self.round_count)
+                self._log_skill_effect(skill, warrior, effect)
 
     def _process_single_attack(self, attacker: Warrior) -> None:
         """处理单个攻击动作"""
@@ -375,6 +404,20 @@ class BattleEngine:
 
         # 处理防御
         result = process_defense(defense_type, target, attacker, base_damage)
+
+        # 特技伤害倍率：攻方打出的伤害与守方反击/反震打出的伤害分别结算
+        attacker_damage_multiplier = 1.0
+        defender_damage_multiplier = 1.0
+        if result.damage_to_defender > 0:
+            attacker_damage_multiplier = attacker.damage_dealt_multiplier(
+                self.round_count
+            )
+            result.damage_to_defender *= attacker_damage_multiplier
+        if result.damage_to_attacker > 0:
+            defender_damage_multiplier = target.damage_dealt_multiplier(
+                self.round_count
+            )
+            result.damage_to_attacker *= defender_damage_multiplier
 
         # 本次防守结算后，后手AP基准加成不再重复生效
         target.consume_ap_bonus()
@@ -443,6 +486,8 @@ class BattleEngine:
             target_courage_after=target.courage,
             target_alive=target.is_alive,
             attacker_alive=attacker.is_alive,
+            attacker_damage_multiplier=attacker_damage_multiplier,
+            defender_damage_multiplier=defender_damage_multiplier,
             **range_details,
         )
 
@@ -452,7 +497,7 @@ class BattleEngine:
 
     def _process_clash(self, ready_warriors: List[Warrior]) -> None:
         """处理多个武将之间的拼刀"""
-        clash_result = process_clash(ready_warriors)
+        clash_result = process_clash(ready_warriors, self.round_count)
 
         # 应用伤害和体力消耗
         for warrior in ready_warriors:
@@ -508,56 +553,245 @@ class BattleEngine:
 
             self.round_count += 1
             self.attack_count = 0
+            self._apply_round_start_skills()
 
     def _deploy(self) -> None:
-        """布阵：双方依次落在出生点（多武将时落在最近空闲格）"""
+        """布阵：双方依次落在出生点格心（多武将时落在最近空闲格）"""
         for team, side in ((self.team_a, "A"), (self.team_b, "B")):
-            occupied = {w.position for w in self.all_warriors if w.position is not None}
+            occupied = {
+                cell_at(w.position) for w in self.all_warriors if w.position is not None
+            }
             for warrior in team:
                 cell = self.battle_map.nearest_free(self.battle_map.spawn(side), occupied)
-                warrior.position = cell
+                warrior.position = cell_center(cell)
                 occupied.add(cell)
 
     def _can_reach(self, attacker: Warrior, target: Warrior) -> bool:
-        """目标是否在射程内且视线通畅"""
+        """目标是否在射程内且视线通畅（按双方实际浮点站位判定）"""
         return (
             chebyshev_distance(attacker.position, target.position) <= attacker.reach
-            and self.battle_map.has_line_of_sight(attacker.position, target.position)
+            and self.battle_map.has_line_of_sight_points(
+                attacker.position, target.position
+            )
         )
 
     def _update_movement(self) -> None:
-        """移动阶段：推进在途移动；射程外且不在后摇的武将向目标寻路接近"""
+        """移动阶段：推进在途移动；射程外且不在后摇的武将向目标寻路接近
+
+        手动移动指令优先于 AI 寻路（无论自动/手动模式）；
+        手动模式下没有指令时原地待命，不自动接近目标。
+        双方都按浮点坐标连续移动，可在任意可走位置停下。
+        """
         if self.battle_map is None:
             return
-        for warrior in self._get_all_alive():
+        alive = self._get_all_alive()
+        for warrior in alive:
             if warrior.is_in_backswing():
+                if warrior.is_moving:
+                    warrior.stop_move()
+                self._end_move_leg(warrior)
                 continue  # 后摇期间锁定站位
-            occupied = {
-                w.position for w in self._get_all_alive() if w is not warrior
-            }
-            if warrior.is_moving:
-                if warrior.move_path[0] in occupied:
-                    warrior.stop_move()  # 目标占路，停下重新规划
-                    continue
-                before = warrior.position
-                advanced = warrior.tick_move(TICK_RATE)
-                if advanced is not None:
-                    self._log(
-                        "move",
-                        f"{warrior.name} 移动 ({before[0]},{before[1]}) → "
-                        f"({advanced[0]},{advanced[1]})",
-                        warrior=warrior.name,
-                        **{"from": list(before), "to": list(advanced)},
-                    )
+
+            others = [
+                other
+                for other in alive
+                if other is not warrior and other.position is not None
+            ]
+            override = self.overrides.get(warrior.name)
+            manual_dir = override.get("move") if override else None
+
+            if manual_dir is not None:
+                self._step_manual_move(warrior, manual_dir, others)
                 continue
+
+            if self._manual_dir.get(warrior.name) is not None:
+                # 松开方向键：结束本段手动移动
+                if warrior.manual_moving:
+                    warrior.stop_move()
+                self._end_move_leg(warrior)
+
+            if override and override.get("mode") == "manual":
+                if warrior.is_moving:
+                    warrior.stop_move()
+                self._end_move_leg(warrior)
+                continue
+
             target = self._find_target(warrior)
-            if target is None or self._can_reach(warrior, target):
+            if target is None:
+                if warrior.is_moving:
+                    warrior.stop_move()
+                self._end_move_leg(warrior)
                 continue
-            path = self.battle_map.find_path_to_range(
-                warrior.position, target.position, warrior.reach, occupied=occupied
+
+            if warrior.is_moving:
+                self._advance_ai_move(warrior, target, others)
+                continue
+
+            if self._can_reach(warrior, target):
+                continue
+
+            occupied = {cell_at(other.position) for other in others}
+            start_cell = cell_at(warrior.position)
+            path = self.battle_map.find_path_to_point_range(
+                start_cell, target.position, warrior.reach, occupied=occupied
             )
             if path:
                 warrior.begin_move(path)
+                self._move_origin.setdefault(warrior.name, warrior.position)
+                self._clear_attack_intent(warrior)
+            elif path == []:
+                # 当前格心已在射程内，但实际站位还差一点：走回格心
+                center = cell_center(start_cell)
+                if math.hypot(
+                    center[0] - warrior.position[0], center[1] - warrior.position[1]
+                ) > 1e-3:
+                    warrior.begin_move([start_cell])
+                    self._move_origin.setdefault(warrior.name, warrior.position)
+
+    def _advance_ai_move(self, warrior: Warrior, target: Warrior, others) -> None:
+        """沿 AI 路点连续推进；进入射程后立即停下"""
+        if self._can_reach(warrior, target):
+            warrior.stop_move()
+            self._end_move_leg(warrior)
+            return
+
+        remaining = warrior.move_speed_cells * TICK_RATE
+        while remaining > 1e-9 and warrior.move_path:
+            waypoint = cell_center(warrior.move_path[0])
+            x, y = warrior.position
+            distance = math.hypot(waypoint[0] - x, waypoint[1] - y)
+            if distance <= 1e-9:
+                warrior.move_path.pop(0)
+                self._flush_move(warrior)
+                if self._can_reach(warrior, target):
+                    warrior.stop_move()
+                    self._end_move_leg(warrior)
+                    return
+                continue
+
+            travel = min(remaining, distance)
+            moved = self._move_position(
+                warrior,
+                x + (waypoint[0] - x) / distance * travel,
+                y + (waypoint[1] - y) / distance * travel,
+                others,
+            )
+            if moved is None:
+                warrior.stop_move()  # 前方被挡，停下重新规划
+                self._end_move_leg(warrior)
+                return
+            remaining -= math.hypot(moved[0] - x, moved[1] - y)
+            if math.hypot(waypoint[0] - moved[0], waypoint[1] - moved[1]) <= 1e-6:
+                warrior.move_path.pop(0)
+                self._flush_move(warrior)
+                if self._can_reach(warrior, target):
+                    warrior.stop_move()
+                    self._end_move_leg(warrior)
+                    return
+
+        if not warrior.move_path:
+            warrior.stop_move()
+            self._end_move_leg(warrior)
+
+    def _step_manual_move(self, warrior: Warrior, direction, others) -> None:
+        """手动移动：按方向连续推进，可停在任意可走位置；方向变化即切段"""
+        dx, dy = direction
+        length = math.hypot(dx, dy)
+        if length <= 0:
+            return
+
+        previous = self._manual_dir.get(warrior.name)
+        if previous is not None and previous != (dx, dy):
+            self._flush_move(warrior)
+        self._manual_dir[warrior.name] = (dx, dy)
+
+        if warrior.move_path:
+            warrior.stop_move()  # 手动优先，丢弃 AI 路点
+
+        step = warrior.move_speed_cells * TICK_RATE
+        before = warrior.position
+        moved = self._move_position(
+            warrior,
+            before[0] + dx / length * step,
+            before[1] + dy / length * step,
+            others,
+        )
+        if moved is None:
+            if warrior.manual_moving:
+                warrior.stop_move()
+                self._end_move_leg(warrior)
+            return
+
+        if not warrior.manual_moving:
+            warrior.begin_manual_move()
+            self._move_origin[warrior.name] = before
+            self._move_cell[warrior.name] = cell_at(before)
+            self._clear_attack_intent(warrior)
+        elif cell_at(warrior.position) != self._move_cell.get(warrior.name):
+            # 跨入新格时记一段，保证回放能连续演出手动移动
+            self._flush_move(warrior)
+            self._move_cell[warrior.name] = cell_at(warrior.position)
+
+    def _move_position(self, warrior: Warrior, x: float, y: float, others) -> Optional[tuple]:
+        """按地图碰撞与单位间距推进到目标点；完全无法移动时返回 None"""
+        start = warrior.position
+        moved = self.battle_map.move_point(
+            start[0], start[1], x - start[0], y - start[1], UNIT_RADIUS
+        )
+        if math.hypot(moved[0] - start[0], moved[1] - start[1]) < 1e-9:
+            return None
+        if others:
+            before_gap = min(
+                math.hypot(start[0] - other.position[0], start[1] - other.position[1])
+                for other in others
+            )
+            after_gap = min(
+                math.hypot(moved[0] - other.position[0], moved[1] - other.position[1])
+                for other in others
+            )
+            if after_gap < UNIT_SEPARATION and after_gap < before_gap - 1e-9:
+                return None
+        warrior.position = moved
+        return moved
+
+    def _flush_move(self, warrior: Warrior) -> None:
+        """结算一段移动事件：从上次事件位置到当前浮点位置"""
+        origin = self._move_origin.get(warrior.name)
+        position = warrior.position
+        if origin is None or position is None:
+            return
+        distance = math.hypot(position[0] - origin[0], position[1] - origin[1])
+        if distance < 1e-4:
+            return
+        duration = max(80, round(distance / warrior.move_speed_cells * 1000))
+        self._log(
+            "move",
+            f"{warrior.name} 移动 ({origin[0]:.1f},{origin[1]:.1f}) → "
+            f"({position[0]:.1f},{position[1]:.1f})",
+            warrior=warrior.name,
+            duration=duration,
+            **{"from": list(origin), "to": list(position)},
+        )
+        self._move_origin[warrior.name] = position
+
+    def _end_move_leg(self, warrior: Warrior) -> None:
+        """结束移动段：补一条收尾事件并清空记账"""
+        self._flush_move(warrior)
+        self._move_origin.pop(warrior.name, None)
+        self._manual_dir.pop(warrior.name, None)
+        self._move_cell.pop(warrior.name, None)
+
+    def _attack_allowed(self, warrior: Warrior) -> bool:
+        """手动模式必须收到攻击指令才出手；自动模式始终允许"""
+        override = self.overrides.get(warrior.name)
+        if override and override.get("mode") == "manual":
+            return bool(override.get("attack"))
+        return True
+
+    def _clear_attack_intent(self, warrior: Warrior) -> None:
+        override = self.overrides.get(warrior.name)
+        if override:
+            override["attack"] = False
 
     def run_tick(self) -> Optional[BattleResult]:
         """运行战斗的一个时间刻度"""
@@ -584,15 +818,19 @@ class BattleEngine:
                 if (target := self._find_target(w)) is not None
                 and self._can_reach(w, target)
             ]
+        ready = [w for w in ready if self._attack_allowed(w)]
 
         if len(ready) >= 2 and check_clash_condition(ready):
             # 拼刀！
             self._process_clash(ready)
+            for warrior in ready:
+                self._clear_attack_intent(warrior)
         elif ready:
             # 按顺序进行单个攻击
             for attacker in ready:
                 if attacker.is_alive:
                     self._process_single_attack(attacker)
+                    self._clear_attack_intent(attacker)
 
         # 检查战斗是否结束（在所有伤害应用后）
         result = self._check_battle_end()
@@ -605,13 +843,18 @@ class BattleEngine:
         # 检查是否超时
         return self._check_timeout()
 
-    def run(self) -> BattleResult:
-        """运行完整战斗直到结束"""
+    def begin(self) -> None:
+        """开战布置：布阵、开场日志与第 1 回合特技（run 与实时会话共用）"""
         if self.battle_map is not None:
             self._deploy()
         self._log("battle_start", "战斗开始！")
         self.round_count = 1
         self._apply_battle_start_skills()
+        self._apply_round_start_skills()
+
+    def run(self) -> BattleResult:
+        """运行完整战斗直到结束"""
+        self.begin()
 
         while True:
             result = self.run_tick()

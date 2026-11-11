@@ -173,10 +173,12 @@ class WeaponTest(unittest.TestCase):
         self.assertIs(xu_chu.weapon.category, WeaponCategory.HEAVY)
         self.assertEqual(xu_chu.weapon.category.value, 4)
 
-        snapshot = ma_chao.snapshot()
-        self.assertEqual(snapshot.weapon_name, "虎头湛金枪")
-        self.assertEqual(snapshot.weapon_category, 1)
-        self.assertEqual(snapshot.weapon_category_label, "枪与矛（刺击类）")
+        snapshot = xu_chu.snapshot()
+        self.assertEqual(snapshot.weapon_name, "血煞虎头刀")
+        self.assertEqual(snapshot.weapon_category, 4)
+        self.assertEqual(
+            snapshot.weapon_category_label, "大斧与长柄锤（重型破甲类）"
+        )
 
     def test_report_and_export_include_weapon(self):
         random.seed(7)
@@ -220,10 +222,13 @@ class WarriorPresetTest(unittest.TestCase):
                 preset["courage"],
                 preset["sp"],
             ),
-            (97, 88, 97, 96, 97),
+            (94, 88, 98, 98, 90),
         )
         self.assertEqual(preset["weapon"], "青龙偃月刀")
-        self.assertEqual(preset["skill"], "none")
+        self.assertEqual(
+            preset["skills"],
+            {"guan_yu_wusheng": True, "courage_floor_80": True},
+        )
 
     def test_guan_yu_preset_is_playable_from_cli(self):
         from main import build_parser, create_warrior
@@ -232,15 +237,18 @@ class WarriorPresetTest(unittest.TestCase):
         guan_yu = create_warrior(args, "a")
 
         self.assertEqual(guan_yu.name, "关羽")
-        self.assertEqual(guan_yu.martialarts_init, 97)
+        self.assertEqual(guan_yu.martialarts_init, 94)
         self.assertEqual(guan_yu.agility_init, 88)
-        self.assertEqual(guan_yu.strength_init, 97)
-        self.assertEqual(guan_yu.courage, 96)
-        self.assertEqual(guan_yu.init_sp, 97)
+        self.assertEqual(guan_yu.strength_init, 98)
+        self.assertEqual(guan_yu.courage, 98)
+        self.assertEqual(guan_yu.init_sp, 90)
         self.assertEqual(guan_yu.weapon.name, "青龙偃月刀")
-        self.assertIs(guan_yu.weapon.category, WeaponCategory.GREAT_BLADE)
+        self.assertIs(guan_yu.weapon.category, WeaponCategory.HEAVY)
         self.assertEqual(guan_yu.weapon.effective_reach, 1)
-        self.assertEqual(guan_yu.skills, [])
+        self.assertEqual(
+            [skill.skill_id for skill in guan_yu.skills],
+            ["guan_yu_wusheng", "courage_floor_80"],
+        )
 
 
 class ClashTest(unittest.TestCase):
@@ -414,30 +422,174 @@ class LeadRecordTest(unittest.TestCase):
 class SkillTest(unittest.TestCase):
     def test_equip_and_unequip(self):
         warrior = make_warrior()
-        self.assertTrue(warrior.equip_skill(get_skill("opening_ap_50")))
+        self.assertTrue(warrior.equip_skill(get_skill("courage_floor_80")))
         # 同 id 特技不可重复装备
-        self.assertFalse(warrior.equip_skill(get_skill("opening_ap_50")))
-        self.assertIn("先声夺人", warrior.skill_descriptions[0])
+        self.assertFalse(warrior.equip_skill(get_skill("courage_floor_80")))
+        self.assertIn("临危不惧", warrior.skill_descriptions[0])
 
-        self.assertTrue(warrior.unequip_skill("opening_ap_50"))
-        self.assertFalse(warrior.unequip_skill("opening_ap_50"))
+        self.assertTrue(warrior.unequip_skill("courage_floor_80"))
+        self.assertFalse(warrior.unequip_skill("courage_floor_80"))
         self.assertEqual(warrior.skills, [])
 
-    def test_opening_ap_skill_triggers_once_and_logs(self):
+    def test_skill_categories_and_exclusive_owner(self):
+        from src.skills import EXCLUSIVE, GENERIC
+
+        self.assertEqual(get_skill("courage_floor_80").category, GENERIC)
+        exclusive = get_skill("guan_yu_wusheng")
+        self.assertEqual(exclusive.category, EXCLUSIVE)
+        self.assertEqual(exclusive.owner, "关羽")
+        self.assertTrue(exclusive.is_exclusive)
+
+    def test_exclusive_skill_only_equippable_by_owner(self):
+        other = make_warrior("赵云")
+        self.assertFalse(other.equip_skill(get_skill("guan_yu_wusheng")))
+        self.assertEqual(other.skills, [])
+
+        guan_yu = make_warrior("关羽")
+        self.assertTrue(guan_yu.equip_skill(get_skill("guan_yu_wusheng")))
+
+    def test_skill_switch_disables_trigger(self):
         random.seed(11)
-        warrior_a = make_warrior("甲", "A")
-        warrior_a.equip_skill(get_skill("opening_ap_50"))
+        warrior_a = make_warrior("关羽", "A")
+        warrior_a.equip_skill(get_skill("guan_yu_wusheng"))
+        self.assertTrue(warrior_a.set_skill_enabled("guan_yu_wusheng", False))
         warrior_b = make_warrior("乙", "B")
 
         result = BattleEngine([warrior_a], [warrior_b]).run()
+        self.assertFalse(
+            [log for log in result.logs if log.event_type == "skill_trigger"]
+        )
+        self.assertIn("已关闭", warrior_a.skill_descriptions[0])
+        self.assertIs(warrior_a.toggle_skill("guan_yu_wusheng"), True)
+        self.assertTrue(warrior_a.skills[0].enabled)
 
-        skill_logs = [log for log in result.logs if log.event_type == "skill_trigger"]
+    def test_courage_floor_skill(self):
+        warrior = make_warrior("赵云", courage=99)
+        self.assertTrue(warrior.equip_skill(get_skill("courage_floor_80")))
+        warrior.modify_courage(-30)
+        self.assertEqual(warrior.courage, 80)
+
+        # 关闭开关后下限失效
+        warrior.set_skill_enabled("courage_floor_80", False)
+        warrior.modify_courage(-10)
+        self.assertEqual(warrior.courage, 70)
+
+        # 装备时若胆气低于下限，会立即抬升
+        low = make_warrior("低胆", courage=50)
+        low.equip_skill(get_skill("courage_floor_80"))
+        self.assertEqual(low.courage, 80)
+
+    def test_guan_yu_wusheng_buffs_first_five_rounds(self):
+        warrior = make_warrior(
+            "关羽", martialarts=94, agility=88, strength=98, courage=98, sp=90
+        )
+        warrior.equip_skill(get_skill("guan_yu_wusheng"))
+        engine = BattleEngine([warrior], [make_warrior("乙", "B")])
+        engine.round_count = 1
+        engine._apply_round_start_skills()
+
+        self.assertEqual(warrior.strength_init, 196)
+        self.assertAlmostEqual(warrior.agility_init, 132.0)
+        self.assertEqual(warrior.martialarts_init, 100)
+
+        for round_num in (1, 3, 5):
+            multiplier = warrior.damage_dealt_multiplier(round_num)
+            self.assertGreaterEqual(multiplier, 1.5)
+            self.assertLessEqual(multiplier, 2.5)
+
+        engine.round_count = 6
+        engine._apply_round_start_skills()
+        self.assertEqual(warrior.strength_init, 98)
+        self.assertAlmostEqual(warrior.agility_init, 88.0)
+        self.assertEqual(warrior.martialarts_init, 94)
+        self.assertEqual(warrior.damage_dealt_multiplier(6), 1.0)
+
+        messages = [
+            log.description
+            for log in engine.logs
+            if log.event_type == "skill_trigger"
+        ]
+        self.assertTrue(any("发动" in message for message in messages))
+        self.assertTrue(any("恢复常态" in message for message in messages))
+
+    def test_guan_yu_skill_toggle_restores_buff(self):
+        warrior = make_warrior(
+            "关羽", martialarts=94, agility=88, strength=98, courage=98, sp=90
+        )
+        warrior.equip_skill(get_skill("guan_yu_wusheng"))
+        engine = BattleEngine([warrior], [make_warrior("乙", "B")])
+        engine.round_count = 1
+        engine._apply_round_start_skills()
+        self.assertEqual(warrior.strength_init, 196)
+
+        warrior.set_skill_enabled("guan_yu_wusheng", False)
+        self.assertEqual(warrior.strength_init, 98)
+        self.assertAlmostEqual(warrior.agility_init, 88.0)
+        self.assertEqual(warrior.martialarts_init, 94)
+        self.assertEqual(warrior.damage_dealt_multiplier(1), 1.0)
+
+    def test_presets_equip_skills(self):
+        from main import build_parser, create_warrior
+
+        args = build_parser().parse_args(
+            ["--a-warrior", "赵云", "--b-warrior", "关羽"]
+        )
+        zhao_yun = create_warrior(args, "a")
+        guan_yu = create_warrior(args, "b")
+
+        self.assertEqual(
+            [skill.skill_id for skill in zhao_yun.skills],
+            ["courage_floor_80"],
+        )
+        self.assertEqual(
+            [skill.skill_id for skill in guan_yu.skills],
+            ["guan_yu_wusheng", "courage_floor_80"],
+        )
+
+    def test_cli_skill_switch(self):
+        from main import build_parser, create_warrior
+
+        args = build_parser().parse_args(
+            ["--b-warrior", "关羽", "--b-skill-off", "guan_yu_wusheng"]
+        )
+        guan_yu = create_warrior(args, "b")
+        self.assertEqual(
+            {skill.skill_id: skill.enabled for skill in guan_yu.skills},
+            {"guan_yu_wusheng": False, "courage_floor_80": True},
+        )
+
+        args = build_parser().parse_args(
+            [
+                "--b-warrior",
+                "关羽",
+                "--b-skill-off",
+                "guan_yu_wusheng",
+                "--b-skill-on",
+                "guan_yu_wusheng",
+            ]
+        )
+        guan_yu = create_warrior(args, "b")
+        self.assertTrue(guan_yu.skills[0].enabled)
+
+    def test_exclusive_skill_grants_opening_ap(self):
+        random.seed(11)
+        warrior_a = make_warrior("关羽", "A")
+        warrior_a.equip_skill(get_skill("guan_yu_wusheng"))
+        warrior_b = make_warrior("乙", "B")
+
+        engine = BattleEngine([warrior_a], [warrior_b])
+        engine.round_count = 1
+        engine._apply_battle_start_skills()
+
+        self.assertEqual(warrior_a.ap, 80)
+        skill_logs = [log for log in engine.logs if log.event_type == "skill_trigger"]
         self.assertEqual(len(skill_logs), 1)
         details = skill_logs[0].details
-        self.assertEqual(details["warrior"], "甲")
-        self.assertEqual(details["skill"], "先声夺人")
+        self.assertEqual(details["warrior"], "关羽")
+        self.assertEqual(details["skill"], "武圣")
+        self.assertEqual(details["category"], "专属")
         self.assertEqual(details["ap_before"], 0)
-        self.assertEqual(details["ap_after"], 50)
+        self.assertEqual(details["ap_after"], 80)
         self.assertEqual(skill_logs[0].round_num, 1)
 
     def test_no_trigger_without_equipped_skill(self):
@@ -452,17 +604,17 @@ class SkillTest(unittest.TestCase):
 
     def test_report_shows_equipped_skill_and_trigger(self):
         random.seed(7)
-        warrior_a = make_warrior("甲", "A")
-        warrior_a.equip_skill(get_skill("opening_ap_50"))
+        warrior_a = make_warrior("关羽", "A")
+        warrior_a.equip_skill(get_skill("guan_yu_wusheng"))
         warrior_b = make_warrior("乙", "B")
         reporter = BattleReporter([warrior_a], [warrior_b])
 
         result = BattleEngine([warrior_a], [warrior_b]).run()
         report = reporter.generate_full_report(result)
 
-        self.assertIn("特技: 先声夺人", report)
-        self.assertIn("特技【先声夺人】发动", report)
-        self.assertIn("AP 0 → 50", report)
+        self.assertIn("特技: [专属] 武圣", report)
+        self.assertIn("特技【武圣】发动", report)
+        self.assertIn("AP 0 → 80", report)
 
 
 class SeedTest(unittest.TestCase):
@@ -589,6 +741,109 @@ class WebBattleApiTest(unittest.TestCase):
         self.assertIn("A", document["warriors"])
         self.assertIn("B", document["warriors"])
         self.assertGreaterEqual(document["battle"]["rounds"], 1)
+
+    def test_options_document_lists_presets_and_skills(self):
+        import main
+
+        args = main.build_parser().parse_args(
+            ["--a-warrior", "赵云", "--b-warrior", "关羽"]
+        )
+        options = main.build_options_document(args)
+
+        self.assertEqual(
+            [warrior["name"] for warrior in options["warriors"]],
+            list(main.WARRIOR_PRESETS),
+        )
+        self.assertEqual(
+            {skill["id"] for skill in options["skills"]},
+            set(main.SKILL_REGISTRY),
+        )
+        self.assertEqual(
+            options["defaults"]["a"],
+            {"warrior": "赵云", "skills": {"courage_floor_80": True}},
+        )
+        self.assertEqual(
+            options["defaults"]["b"],
+            {
+                "warrior": "关羽",
+                "skills": {"guan_yu_wusheng": True, "courage_floor_80": True},
+            },
+        )
+
+    def test_side_defaults_follow_cli_args(self):
+        import main
+
+        args = main.build_parser().parse_args(
+            [
+                "--a-warrior",
+                "马超",
+                "--b-warrior",
+                "关羽",
+                "--b-skill-off",
+                "guan_yu_wusheng",
+            ]
+        )
+        defaults_a = main.side_defaults(args, "a")
+        defaults_b = main.side_defaults(args, "b")
+
+        self.assertEqual(defaults_a, {"warrior": "马超", "skills": {}})
+        self.assertEqual(defaults_b["warrior"], "关羽")
+        self.assertEqual(
+            defaults_b["skills"],
+            {"guan_yu_wusheng": False, "courage_floor_80": True},
+        )
+
+    def test_parse_skills_param(self):
+        import main
+
+        self.assertEqual(
+            main.parse_skills_param("courage_floor_80,guan_yu_wusheng:0"),
+            {"courage_floor_80": True, "guan_yu_wusheng": False},
+        )
+        self.assertEqual(main.parse_skills_param(""), {})
+        with self.assertRaises(ValueError):
+            main.parse_skills_param("no_such_skill")
+        with self.assertRaises(ValueError):
+            main.parse_skills_param("courage_floor_80:2")
+
+    def test_battle_setup_overrides_warriors_and_skills(self):
+        import main
+
+        args = main.build_parser().parse_args([])
+        query = {
+            "a_warrior": ["马超"],
+            "a_skills": [""],
+            "b_warrior": ["关羽"],
+            "b_skills": ["guan_yu_wusheng:0,courage_floor_80"],
+        }
+        setup = main.parse_battle_setup(args, query)
+        state = random.getstate()
+        try:
+            document = main.build_random_document(args, setup)
+        finally:
+            random.setstate(state)
+
+        self.assertEqual(document["warriors"]["A"]["name"], "马超")
+        self.assertEqual(document["warriors"]["A"]["skillInfo"], [])
+        self.assertEqual(document["warriors"]["B"]["name"], "关羽")
+        self.assertEqual(
+            {info["id"]: info["enabled"] for info in document["warriors"]["B"]["skillInfo"]},
+            {"guan_yu_wusheng": False, "courage_floor_80": True},
+        )
+
+    def test_battle_setup_rejects_invalid_config(self):
+        import main
+
+        args = main.build_parser().parse_args([])
+        invalid_queries = [
+            {"a_warrior": ["吕布"]},
+            {"a_skills": ["no_such_skill"]},
+            {"a_warrior": ["赵云"], "a_skills": ["guan_yu_wusheng"]},
+            {"b_skills": ["courage_floor_80:2"]},
+        ]
+        for query in invalid_queries:
+            with self.assertRaises(ValueError):
+                main.parse_battle_setup(args, query)
 
 
 if __name__ == "__main__":

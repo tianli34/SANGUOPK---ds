@@ -34,22 +34,29 @@ def check_clash_condition(ready_warriors: List["Warrior"]) -> bool:
     return max(ap_values) - min(ap_values) <= CLASH_AP_THRESHOLD
 
 
-def calculate_clash_damage(warrior_a: "Warrior", warrior_b: "Warrior") -> tuple:
+def calculate_clash_damage(
+    warrior_a: "Warrior",
+    warrior_b: "Warrior",
+    multiplier_a: float = 1.0,
+    multiplier_b: float = 1.0,
+) -> tuple:
     """
     计算两个武将之间的拼刀伤害
 
     冲击力 = √(敌方力量 × 己方力量) × 0.5
-    受伤 = 冲击力 × (敌方力量 / 己方力量) × 2
+    受伤 = 冲击力 × (敌方力量 / 己方力量) × 2 × 对方伤害倍率
     体力消耗 = 受伤 × 0.3
 
     返回: (武将A受到的伤害, 武将B受到的伤害, A的体力消耗, B的体力消耗)
     """
     impact = math.sqrt(warrior_a.strength * warrior_b.strength) * 0.5
 
-    # A受到B的伤害
+    # A受到B的伤害（乘以B的伤害倍率）
     damage_a = impact * (warrior_b.strength / warrior_a.strength) * 2 * 3.0
-    # B受到A的伤害
+    damage_a *= multiplier_b
+    # B受到A的伤害（乘以A的伤害倍率）
     damage_b = impact * (warrior_a.strength / warrior_b.strength) * 2 * 3.0
+    damage_b *= multiplier_a
 
     sp_cost_a = damage_a * 0.3
     sp_cost_b = damage_b * 0.3
@@ -57,7 +64,7 @@ def calculate_clash_damage(warrior_a: "Warrior", warrior_b: "Warrior") -> tuple:
     return damage_a, damage_b, sp_cost_a, sp_cost_b
 
 
-def process_clash(warriors: List["Warrior"]) -> ClashResult:
+def process_clash(warriors: List["Warrior"], round_num: int = 1) -> ClashResult:
     """
     处理多个武将之间的拼刀
     每对敌人之间都会相互攻击
@@ -69,7 +76,12 @@ def process_clash(warriors: List["Warrior"]) -> ClashResult:
     for i, w1 in enumerate(warriors):
         for w2 in warriors[i + 1 :]:
             if w1.team != w2.team:  # 只在敌人之间拼刀
-                dmg_1, dmg_2, sp_1, sp_2 = calculate_clash_damage(w1, w2)
+                dmg_1, dmg_2, sp_1, sp_2 = calculate_clash_damage(
+                    w1,
+                    w2,
+                    w1.damage_dealt_multiplier(round_num),
+                    w2.damage_dealt_multiplier(round_num),
+                )
                 damages[w1.name] += dmg_1
                 damages[w2.name] += dmg_2
                 sp_costs[w1.name] += sp_1

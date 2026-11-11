@@ -175,6 +175,12 @@ class BattleReporter:
             lines.append(f"    防守方AP: {defender_ap_percent * 100:.1f}%")
         if defense_rate is not None:
             lines.append(f"    成功率: {defense_rate * 100:.1f}%")
+        attacker_multiplier = details.get("attacker_damage_multiplier", 1.0)
+        if attacker_multiplier and attacker_multiplier != 1.0:
+            lines.append(f"    攻方特技伤害倍率: ×{attacker_multiplier:.2f}")
+        defender_multiplier = details.get("defender_damage_multiplier", 1.0)
+        if defender_multiplier and defender_multiplier != 1.0:
+            lines.append(f"    守方特技伤害倍率: ×{defender_multiplier:.2f}")
         lines.append(f"    判定结果: {success_text}")
 
         changes = []

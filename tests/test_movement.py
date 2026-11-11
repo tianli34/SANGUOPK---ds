@@ -1,7 +1,6 @@
 # 文件名: tests/test_movement.py
 # 用途: 地图、寻路、射程、移动、引擎集成、事件导出与确定性的单元测试
 
-import math
 import random
 import sys
 import unittest
@@ -21,9 +20,9 @@ from src import (
     get_map,
     get_weapon,
 )
-from src.constants import MOVE_CELL_PROGRESS, MOVE_SPEED_BASE, TICK_RATE
+from src.constants import TICK_RATE, UNIT_RADIUS
 from src.event_exporter import build_battle_document
-from src.map import bresenham_cells
+from src.map import bresenham_cells, cell_at, cell_center
 
 
 def make_warrior(name="测试", team="A", **overrides):
@@ -108,6 +107,48 @@ class MapTest(unittest.TestCase):
         )
         self.assertNotIn((1, 1), battle_map.neighbors((0, 0)))
         self.assertIn((1, 0), battle_map.neighbors((0, 0)))
+
+
+class ContinuousPositionTest(unittest.TestCase):
+    def test_cell_center_and_cell_at(self):
+        self.assertEqual(cell_center((2, 3)), (2.5, 3.5))
+        self.assertEqual(cell_at((2.5, 3.5)), (2, 3))
+        self.assertEqual(cell_at((2.99, 3.01)), (2, 3))
+
+    def test_point_walkable_with_radius(self):
+        wall = BattleMap.from_rows(
+            "石墙", [".....", "..#..", "....."], spawns=((0, 0), (4, 2))
+        )
+        self.assertTrue(wall.is_point_walkable(1.5, 1.5, UNIT_RADIUS))
+        self.assertFalse(wall.is_point_walkable(2.6, 1.5, UNIT_RADIUS))
+        self.assertTrue(wall.is_point_walkable(2.6, 0.5, UNIT_RADIUS))
+
+    def test_move_point_slides_along_wall(self):
+        wall = BattleMap.from_rows(
+            "石墙", [".....", "..#..", "....."], spawns=((0, 0), (4, 2))
+        )
+        x, y = wall.move_point(0.5, 1.5, 2.0, 0.1, UNIT_RADIUS)
+        self.assertGreater(x, 0.5)
+        self.assertLess(x, 1.8)
+        self.assertTrue(wall.is_point_walkable(x, y, UNIT_RADIUS))
+
+    def test_float_line_of_sight_blocked_by_rock(self):
+        wall = BattleMap.from_rows(
+            "石墙", [".....", "..#..", "....."], spawns=((0, 0), (4, 2))
+        )
+        self.assertFalse(wall.has_line_of_sight_points((0.5, 1.5), (4.5, 1.5)))
+        self.assertTrue(wall.has_line_of_sight_points((0.5, 0.5), (3.5, 0.5)))
+
+    def test_path_to_point_range_uses_float_target(self):
+        battle_map = get_default_map()
+        target = (10.9, 3.5)
+        path = battle_map.find_path_to_point_range(
+            (2, 3), target, 1, occupied={(10, 3)}
+        )
+        self.assertTrue(path)
+        end = cell_center(path[-1])
+        self.assertLessEqual(chebyshev_distance(end, target), 1)
+        self.assertTrue(battle_map.has_line_of_sight_points(end, target))
 
 
 class PathfindingTest(unittest.TestCase):
@@ -218,24 +259,15 @@ class MovementTest(unittest.TestCase):
         self.assertTrue(warrior.is_in_backswing())
         self.assertFalse(warrior.begin_move([(3, 3)]))
 
-    def test_tick_move_cadence(self):
+    def test_move_speed_and_manual_state(self):
         warrior = make_warrior(agility=90)
-        warrior.position = (2, 3)
-        warrior.begin_move([(3, 3), (4, 3)])
-        speed = MOVE_SPEED_BASE + warrior.agility
-        self.assertEqual(speed, 140)
-        expected_ticks = math.ceil(MOVE_CELL_PROGRESS / (speed * TICK_RATE))
-        ticks = 0
-        while warrior.position == (2, 3):
-            warrior.tick_move(TICK_RATE)
-            ticks += 1
-            self.assertLess(ticks, 1000)
-        self.assertEqual(ticks, expected_ticks)
+        self.assertEqual(warrior.move_speed, 140)
+        self.assertAlmostEqual(warrior.move_speed_cells, 1.4)
+        self.assertTrue(warrior.begin_manual_move())
         self.assertTrue(warrior.is_moving)
-        while warrior.is_moving:
-            warrior.tick_move(TICK_RATE)
-        self.assertEqual(warrior.position, (4, 3))
-        self.assertEqual(warrior.move_progress, 0.0)
+        self.assertEqual(warrior.ap, 0.0)
+        warrior.stop_move()
+        self.assertFalse(warrior.is_moving)
 
     def test_no_ap_and_no_attack_while_moving(self):
         warrior = make_warrior()
@@ -262,8 +294,8 @@ class EngineIntegrationTest(unittest.TestCase):
         logs = result.logs
         start = next(l for l in logs if l.event_type == "battle_start")
         start_positions = positions_from_states(start.warrior_states)
-        self.assertEqual(start_positions["A"], (2, 3))
-        self.assertEqual(start_positions["B"], (10, 3))
+        self.assertEqual(start_positions["A"], (2.5, 3.5))
+        self.assertEqual(start_positions["B"], (10.5, 3.5))
 
         moves = [l for l in logs if l.event_type == "move"]
         self.assertTrue(moves)
@@ -271,8 +303,10 @@ class EngineIntegrationTest(unittest.TestCase):
         for log in moves:
             src = tuple(log.details["from"])
             dst = tuple(log.details["to"])
-            self.assertEqual(chebyshev_distance(src, dst), 1)
-            self.assertTrue(battle_map.is_walkable(dst))
+            # 每段最多跨一格（斜向欧氏距离为 √2，切比雪夫距离仍为 1）
+            self.assertLessEqual(chebyshev_distance(src, dst), 1 + 1e-6)
+            self.assertGreater(chebyshev_distance(src, dst), 0)
+            self.assertTrue(battle_map.is_point_walkable(*dst))
 
         attacks = [l for l in logs if l.event_type == "attack"]
         self.assertTrue(attacks)
@@ -282,13 +316,13 @@ class EngineIntegrationTest(unittest.TestCase):
             self.assertLessEqual(distance, log.details["attacker_reach"])
             positions = positions_from_states(log.warrior_states)
             pos_a, pos_b = positions["A"], positions["B"]
-            self.assertEqual(distance, chebyshev_distance(pos_a, pos_b))
-            self.assertTrue(battle_map.has_line_of_sight(pos_a, pos_b))
+            self.assertAlmostEqual(distance, chebyshev_distance(pos_a, pos_b))
+            self.assertTrue(battle_map.has_line_of_sight_points(pos_a, pos_b))
 
         final_positions = positions_from_states(logs[-1].warrior_states)
         self.assertNotEqual(final_positions["A"], final_positions["B"])
-        self.assertTrue(battle_map.is_walkable(final_positions["A"]))
-        self.assertTrue(battle_map.is_walkable(final_positions["B"]))
+        self.assertTrue(battle_map.is_point_walkable(*final_positions["A"]))
+        self.assertTrue(battle_map.is_point_walkable(*final_positions["B"]))
 
     def test_battle_terminates(self):
         result, _, _, _, _ = make_battle(with_map=True)
@@ -318,7 +352,9 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(doc["meta"]["version"], 2)
         self.assertEqual(doc["map"]["name"], "演武场")
         self.assertEqual((doc["map"]["width"], doc["map"]["height"]), (13, 7))
-        self.assertEqual(doc["map"]["spawns"], {"A": [2, 3], "B": [10, 3]})
+        self.assertEqual(
+            doc["map"]["spawns"], {"A": [2.5, 3.5], "B": [10.5, 3.5]}
+        )
         self.assertIn([0, 1], doc["map"]["obstacles"])
         self.assertEqual(doc["map"]["rocks"], [])
 

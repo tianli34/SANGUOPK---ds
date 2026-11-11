@@ -18,6 +18,10 @@
   const DEFENSE_VERB = { block: "格挡", parry: "招架", dodge: "闪避", counter: "反击" };
   const STAGGER_DAMAGE_RATIO = 0.005;
 
+  /* 飘字纵向分层：同侧最多 6 条，每条错开 7% 舞台高度 */
+  const FLOAT_LANES = 6;
+  const FLOAT_LANE_GAP = 7;
+
   /* atan2 每 45° 一档，与图集 1/5/6/7/8 朝向条带对应；左半边镜像右侧条带 */
   const FACING_SECTORS = ["r", "dr", "d", "dl", "l", "ul", "u", "ur"];
   const FACING_MIRRORED = new Set(["l", "ul", "dl"]);
@@ -39,7 +43,8 @@
       this.speed = 1;
       this.paused = false;
       this.generation = 0;
-      this.floatStacks = { A: 0, B: 0 };
+      this.floatLanes = { A: [], B: [] };
+      this.floatDirs = { A: -1, B: -1 };
       this.defSeq = 0;
       this.clashSeq = 0;
       this.warriors = null;
@@ -217,12 +222,12 @@
       });
     }
 
-    /** 把单位锚定到格子中心（坐标可为小数，用于移动插值） */
+    /** 按浮点格坐标摆放单位（0.5 即格心），边角处限制半个身位避免被裁切 */
     placeUnit(side, x, y) {
       const unit = this.units[side];
-      unit.style.left = `${((x + 0.5) / this.map.width) * 100}%`;
+      unit.style.left = `${(x / this.map.width) * 100}%`;
       const half = this.clampY[side];
-      const rawTop = ((y + 0.5) / this.map.height) * 100;
+      const rawTop = (y / this.map.height) * 100;
       const top = half ? Math.min(Math.max(rawTop, half), 100 - half) : rawTop;
       unit.style.top = `${top}%`;
       unit.style.zIndex = String(10 + Math.round(y));
@@ -231,8 +236,8 @@
     anchorPercent(side) {
       const pos = this.positions[side];
       return {
-        x: ((pos.x + 0.5) / this.map.width) * 100,
-        y: ((pos.y + 0.5) / this.map.height) * 100,
+        x: (pos.x / this.map.width) * 100,
+        y: (pos.y / this.map.height) * 100,
       };
     }
 
@@ -277,7 +282,10 @@
         const reach = (weapon && weapon.reach) || 1;
         this.cells.forEach((cell) => {
           if (cell.blocked) return;
-          const dist = Math.max(Math.abs(cell.x - pos.x), Math.abs(cell.y - pos.y));
+          const dist = Math.max(
+            Math.abs(cell.x + 0.5 - pos.x),
+            Math.abs(cell.y + 0.5 - pos.y)
+          );
           if (dist <= reach) cell.el.classList.add(side === "A" ? "in-range-a" : "in-range-b");
         });
       });
@@ -302,16 +310,18 @@
     }
 
     async moveUnit(ev, gen) {
-      if (!this.map || !ev.move || !ev.move.side) {
+      const from = ev.move && ev.move.from;
+      const to = ev.move && ev.move.to;
+      if (!this.map || !ev.move || !ev.move.side || !from || !to) {
         await this.wait(this.ms(120));
         return;
       }
       const side = ev.move.side;
-      const from = ev.move.from;
-      const to = ev.move.to;
       const unit = this.units[side];
+      const distance = Math.hypot(to[0] - from[0], to[1] - from[1]);
+      const duration = ev.move.duration || Math.max(120, distance * 240);
       unit.classList.add("moving");
-      const ok = await this.tween(240, (t) => {
+      const ok = await this.tween(duration, (t) => {
         const x = from[0] + (to[0] - from[0]) * t;
         const y = from[1] + (to[1] - from[1]) * t;
         this.positions[side] = { x, y };
@@ -324,6 +334,32 @@
       this.placeUnit(side, to[0], to[1]);
       this.updateFacing();
       this.updateRange();
+    }
+
+    /** 实时操控：按服务器浮点站位平滑跟随，帧间指数逼近消除轮询顿挫 */
+    liveTick(state, dt) {
+      if (!this.map || !state) return;
+      ["A", "B"].forEach((side) => {
+        const entry = state[side];
+        if (!entry || !entry.position) return;
+        const [px, py] = entry.position;
+        const prev = this.positions[side];
+        let x = px;
+        let y = py;
+        if (prev) {
+          const gap = Math.hypot(px - prev.x, py - prev.y);
+          if (gap <= 2 && gap > 0.002) {
+            const alpha = 1 - Math.exp(-dt * 20);
+            x = prev.x + (px - prev.x) * alpha;
+            y = prev.y + (py - prev.y) * alpha;
+          }
+        }
+        this.positions[side] = { x, y };
+        this.placeUnit(side, x, y);
+        this.units[side].classList.toggle("moving", Boolean(entry.moving));
+      });
+      this.updateFacing();
+      if (this.rangeOn) this.updateRange();
     }
 
     spawnDust() {
@@ -383,7 +419,8 @@
       this.generation += 1;
       this.fxLayer.innerHTML = "";
       this.floatLayer.innerHTML = "";
-      this.floatStacks = { A: 0, B: 0 };
+      this.floatLanes = { A: [], B: [] };
+      this.floatDirs = { A: -1, B: -1 };
       this.defenseBanner.hidden = true;
       this.clashBanner.hidden = true;
       this.stage.querySelectorAll(".skill-toast, .unit-mark, .ghost, .slash-fx, .ring-fx, .arc-fx, .spark").forEach((node) => node.remove());
@@ -616,33 +653,46 @@
       });
     }
 
-    /** 横幅跟随防守方站位：水平相对武将盒左移 1.6 倍自身宽度，置于武将上方 48px；上方放不下时优先贴顶 */
+    /** 横幅贴在防守武将外侧（左/右），垂直居中于武将身体，不再压头顶 */
     placeDefenseBanner(side) {
       const banner = this.defenseBanner;
       const unit = this.units[side];
       const host = banner.offsetParent;
-      if (!this.map || !this.positions[side] || !host || !unit) {
+      if (!host || !unit) {
         banner.style.left = "";
         banner.style.top = "";
         return;
       }
-      const half = banner.offsetWidth / 2;
-      const height = banner.offsetHeight;
-      const overhang = this.defResult.offsetWidth + 8;
       const edge = 8;
-      const topGap = 48;
-      const groundGap = 12;
-      const headTop = unit.offsetTop;
-      const center = unit.offsetLeft + unit.offsetWidth / 2 - banner.offsetWidth * 1.6;
+      const gap = 16;
+      const width = banner.offsetWidth;
+      const height = banner.offsetHeight;
+      const half = width / 2;
+      const other = side === "A" ? "B" : "A";
+      const unitOther = this.units[other];
+
+      let outward = side === "A" ? -1 : 1;
+      if (this.positions[side] && this.positions[other]) {
+        outward = this.positions[side].x <= this.positions[other].x ? -1 : 1;
+      } else if (unitOther) {
+        const mine = unit.offsetLeft + unit.offsetWidth / 2;
+        const theirs = unitOther.offsetLeft + unitOther.offsetWidth / 2;
+        outward = mine <= theirs ? -1 : 1;
+      }
+
+      const unitLeft = unit.offsetLeft;
+      const unitRight = unit.offsetLeft + unit.offsetWidth;
+      const center = outward < 0 ? unitLeft - gap - half : unitRight + gap + half;
+
       const left = Math.min(
         Math.max(center, half + edge),
-        Math.max(half + edge, host.clientWidth - half - overhang - edge),
+        Math.max(half + edge, host.clientWidth - half - edge),
       );
-      let top = headTop - height - topGap;
-      if (top < edge) {
-        top = unit.offsetTop >= height + edge ? edge : unit.offsetTop + unit.offsetHeight + groundGap;
-      }
-      top = Math.min(Math.max(top, edge), Math.max(edge, host.clientHeight - height - edge));
+      const bodyMid = unit.offsetTop + unit.offsetHeight * 0.5;
+      const top = Math.min(
+        Math.max(bodyMid - height / 2, edge),
+        Math.max(edge, host.clientHeight - height - edge),
+      );
       banner.style.left = `${left}px`;
       banner.style.top = `${top}px`;
     }
@@ -661,7 +711,6 @@
     addFloat(side, kind, value) {
       const rounded = Math.round(value);
       if (rounded === 0) return;
-      const stack = Math.min(this.floatStacks[side], 5);
       const node = document.createElement("div");
       node.className = `float-num is-${kind}`;
       node.textContent = `${value > 0 ? "+" : ""}${rounded}`;
@@ -672,14 +721,37 @@
         baseX = anchor.x;
         baseY = anchor.y - 16;
       }
-      node.style.left = `${baseX + (Math.random() * 5 - 2.5)}%`;
-      node.style.top = `${baseY - stack * 7}%`;
-      this.floatLayer.appendChild(node);
-      this.floatStacks[side] += 1;
-      this.later(1250, () => {
+
+      const lanes = this.floatLanes[side];
+      for (let i = lanes.length - 1; i >= 0; i -= 1) {
+        if (!lanes[i].node.isConnected) lanes.splice(i, 1);
+      }
+      if (!lanes.length) this.floatDirs[side] = baseY < 40 ? 1 : -1;
+      const dir = this.floatDirs[side];
+
+      let lane = 0;
+      while (lane < FLOAT_LANES && lanes.some((entry) => entry.lane === lane)) lane += 1;
+      if (lane === FLOAT_LANES) {
+        lane = lanes[0].lane;
+        lanes[0].release();
+      }
+
+      const startY = dir > 0 ? Math.max(baseY, 5) : baseY;
+      node.style.left = `${baseX}%`;
+      node.style.top = `${Math.min(95, Math.max(3, startY + dir * lane * FLOAT_LANE_GAP))}%`;
+
+      const entry = { lane, node, release: null };
+      const release = () => {
+        const index = lanes.indexOf(entry);
+        if (index >= 0) lanes.splice(index, 1);
         node.remove();
-        this.floatStacks[side] = Math.max(0, this.floatStacks[side] - 1);
-      });
+      };
+      entry.release = release;
+
+      lanes.push(entry);
+      this.floatLayer.appendChild(node);
+      node.addEventListener("animationend", release, { once: true });
+      this.later(8000, release);
     }
 
     slash(x, y, flip) {

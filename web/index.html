@@ -39,6 +39,17 @@
             <span class="courage-value" id="courage-A">0</span>
             <span class="courage-caption" id="courage-caption-A"></span>
           </div>
+          <div class="control-row">
+            <button class="btn-mode" id="btn-mode-A" type="button" disabled title="实时操控模式下切换手动 / 自动控制">自动</button>
+            <span class="control-active" id="control-active-A" hidden>键盘操控中</span>
+          </div>
+          <div class="gauge gauge--ap" id="ap-gauge-A" hidden>
+            <span class="gauge-tag">势</span>
+            <div class="gauge-track">
+              <div class="gauge-fill"></div>
+            </div>
+            <span class="gauge-value" id="ap-value-A">—</span>
+          </div>
         </div>
       </section>
 
@@ -77,6 +88,17 @@
             <span class="courage-label">胆气</span>
             <span class="courage-value" id="courage-B">0</span>
             <span class="courage-caption" id="courage-caption-B"></span>
+          </div>
+          <div class="control-row">
+            <button class="btn-mode" id="btn-mode-B" type="button" disabled title="实时操控模式下切换手动 / 自动控制">自动</button>
+            <span class="control-active" id="control-active-B" hidden>键盘操控中</span>
+          </div>
+          <div class="gauge gauge--ap" id="ap-gauge-B" hidden>
+            <span class="gauge-tag">势</span>
+            <div class="gauge-track">
+              <div class="gauge-fill"></div>
+            </div>
+            <span class="gauge-value" id="ap-value-B">—</span>
           </div>
         </div>
       </section>
@@ -167,9 +189,13 @@
       </aside>
 
       <section class="bottom">
+        <div class="live-hint" id="live-hint" hidden>
+          键盘：<b>WASD / 方向键</b> 移动 · <b>J</b> 攻击 · <b>1 / 2 / Tab</b> 切换武将 · <b>空格</b> 暂停 · 点击武将或面板选中 · 自动模式下键盘指令同样优先
+        </div>
         <div class="controls">
           <button class="btn primary" id="btn-play" type="button">开始</button>
-          <button class="btn" id="btn-new" type="button" title="随机生成一场新战斗">新的一局</button>
+          <button class="btn" id="btn-new" type="button" title="选择对战武将与特技，开始新战斗">新的一局</button>
+          <button class="btn" id="btn-live" type="button" title="进入实时操控：键盘控制武将移动与攻击（需本地服务）">实时操控</button>
           <div class="speed-group" role="group" aria-label="播放速度">
             <button class="speed-btn is-active" data-speed="1" type="button">1×</button>
             <button class="speed-btn" data-speed="2" type="button">2×</button>
@@ -187,6 +213,37 @@
           <span class="progress-hint" id="progress-hint">可拖动定位任意事件</span>
         </div>
       </section>
+    </div>
+
+    <div class="setup-overlay" id="setup-overlay" hidden>
+      <div class="setup-card" role="dialog" aria-modal="true" aria-label="新局配置">
+        <div class="setup-head">
+          <h2 class="setup-title">点将 · 新局配置</h2>
+          <button class="btn-ghost" id="btn-setup-close" type="button">关闭</button>
+        </div>
+        <div class="setup-grid">
+          <section class="setup-side" data-side="A">
+            <h3 class="setup-side-title"><span class="team-badge">A</span> 出战武将</h3>
+            <div class="warrior-chips" id="warrior-chips-A"></div>
+            <div class="setup-stats" id="setup-stats-A"></div>
+            <h4 class="setup-skills-title">特技配置</h4>
+            <div class="skill-list" id="skill-list-A"></div>
+          </section>
+          <section class="setup-side" data-side="B">
+            <h3 class="setup-side-title"><span class="team-badge">B</span> 出战武将</h3>
+            <div class="warrior-chips" id="warrior-chips-B"></div>
+            <div class="setup-stats" id="setup-stats-B"></div>
+            <h4 class="setup-skills-title">特技配置</h4>
+            <div class="skill-list" id="skill-list-B"></div>
+          </section>
+        </div>
+        <p class="setup-error" id="setup-error" hidden></p>
+        <div class="setup-actions">
+          <button class="btn" id="btn-setup-reset" type="button">恢复默认</button>
+          <button class="btn" id="btn-setup-cancel" type="button">取消</button>
+          <button class="btn primary" id="btn-setup-start" type="button">开战</button>
+        </div>
+      </div>
     </div>
   </div>
 

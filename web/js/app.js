@@ -20,6 +20,10 @@
 
   const TIER_CLASSES = ["tier-0", "tier-1", "tier-2", "tier-3"];
 
+  // file:// 直接打开时没有同源后端，尝试连接默认端口的本地服务
+  const API_BASE =
+    window.location.protocol === "file:" ? "http://127.0.0.1:8000/" : "";
+
   const S = {
     doc: null,
     events: [],
@@ -33,8 +37,6 @@
     log: null,
     scene: null,
     lastRound: null,
-    canNewBattle: false,
-    newBattlePending: false,
   };
 
   const els = {
@@ -59,10 +61,16 @@
     emptyState: $("empty-state"),
     btnPlay: $("btn-play"),
     btnNew: $("btn-new"),
+    btnLive: $("btn-live"),
     btnPrev: $("btn-prev"),
     btnReplay: $("btn-replay"),
     btnEnd: $("btn-end"),
     btnResultNew: $("btn-result-new"),
+    setupOverlay: $("setup-overlay"),
+    setupError: $("setup-error"),
+    btnSetupStart: $("btn-setup-start"),
+    progressHint: $("progress-hint"),
+    liveHint: $("live-hint"),
   };
 
   /* ================= 顶部状态面板 ================= */
@@ -88,11 +96,26 @@
         const warrior = doc.warriors[side];
         $("name-" + side).textContent = warrior.name;
         const skillEl = $("skill-" + side);
-        const skill = warrior.skills && warrior.skills.length ? warrior.skills[0] : "";
-        if (skill) {
-          const short = skill.split("（")[0];
-          skillEl.textContent = `特技 · ${short}`;
-          skillEl.title = skill;
+        const skillInfos =
+          warrior.skillInfo && warrior.skillInfo.length
+            ? warrior.skillInfo
+            : (warrior.skills || []).map((text) => ({
+                name: text.split("（")[0],
+                description: text,
+                enabled: true,
+              }));
+        if (skillInfos.length) {
+          skillEl.textContent = `特技 · ${skillInfos
+            .map((info) => (info.enabled === false ? `${info.name}(关闭)` : info.name))
+            .join(" / ")}`;
+          skillEl.title = skillInfos
+            .map(
+              (info) =>
+                `${info.category ? `[${info.category}] ` : ""}${info.name}：${
+                  info.description || ""
+                }`
+            )
+            .join("\n");
           skillEl.hidden = false;
         } else {
           skillEl.hidden = true;
@@ -328,9 +351,14 @@
       } else if (ev.type === "skill_trigger") {
         li.className = "log-entry";
         const skill = ev.skill || {};
+        const effect = skill.amount
+          ? `<span class="log-effects"><span class="fx-courage-up">AP +${esc(skill.amount)}</span></span>`
+          : skill.description
+            ? `<span class="log-effects">${esc(skill.description)}</span>`
+            : "";
         li.innerHTML = `<span class="log-skill">✦ 特技 · ${esc(skill.name || "")}</span>
           <span class="log-owner">${esc(skill.warrior || "")}</span>
-          ${skill.amount ? `<span class="log-effects"><span class="fx-courage-up">AP +${esc(skill.amount)}</span></span>` : ""}`;
+          ${effect}`;
       } else if (ev.type === "attack") {
         li.className = "log-entry";
         const defense = ev.defense || {};
@@ -480,10 +508,10 @@
       els.btnPlay.disabled = !S.events.length;
     }
 
-    els.btnPrev.disabled = S.cursor <= -1;
-    const newDisabled = !S.canNewBattle || S.newBattlePending;
-    els.btnNew.disabled = newDisabled;
-    els.btnResultNew.disabled = newDisabled;
+    els.btnPrev.disabled = Live.active || S.cursor <= -1;
+    els.btnReplay.disabled = Live.active;
+    els.btnEnd.disabled = Live.active;
+    els.progress.disabled = Live.active;
   }
 
   function showResult(ev) {
@@ -691,38 +719,596 @@
     }
   }
 
-  async function probeNewBattle() {
+  /* ================= 实时操控 ================= */
+
+  const Live = {
+    active: false,
+    sessionId: null,
+    events: [],
+    queue: [],
+    prevState: null,
+    playedIndex: -1,
+    finished: false,
+    battle: null,
+    modes: { A: "auto", B: "auto" },
+    activeSide: "A",
+    keys: new Set(),
+    attackPending: { A: false, B: false },
+    state: null,
+    tickDebt: 0,
+    lastPoll: 0,
+    replayDoc: null,
+  };
+
+  const LIVE_POLL_MS = 120;
+  // TICK_RATE=0.05 → 每秒 20 tick 时游戏时间与真实时间 1:1，倍速按 S.speed 放大
+  const LIVE_TICKS_PER_SEC = 20;
+  const MOVE_KEYS = {
+    KeyW: [0, -1], ArrowUp: [0, -1],
+    KeyS: [0, 1], ArrowDown: [0, 1],
+    KeyA: [-1, 0], ArrowLeft: [-1, 0],
+    KeyD: [1, 0], ArrowRight: [1, 0],
+  };
+
+  async function startLive() {
+    if (Live.active || !S.doc) return;
+    const params = new URLSearchParams();
+    ["A", "B"].forEach((side) => {
+      const warrior = S.doc.warriors[side];
+      const key = side.toLowerCase();
+      params.set(`${key}_warrior`, warrior.name);
+      const infos = warrior.skillInfo || [];
+      params.set(
+        `${key}_skills`,
+        infos.map((info) => `${info.id}:${info.enabled === false ? 0 : 1}`).join(",")
+      );
+    });
+    els.btnLive.disabled = true;
     try {
-      const response = await fetch("api/health", { cache: "no-store" });
-      if (!response.ok) return false;
-      const data = await response.json();
-      return Boolean(data && data.ok);
+      const response = await fetch(API_BASE + "api/session/new?" + params.toString(), {
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error((data && data.error) || `HTTP ${response.status}`);
+      enterLive(data.sessionId, data.doc);
     } catch (error) {
-      return false;
+      console.error("进入实时操控失败:", error);
+      const hint = /fetch/i.test(error.message)
+        ? "实时操控需要本地服务：python main.py --serve-web"
+        : `无法进入实时操控：${error.message}`;
+      S.scene.toast(hint, { center: true });
+    } finally {
+      els.btnLive.disabled = false;
     }
   }
 
-  async function newBattle() {
-    if (S.newBattlePending) return;
+  function enterLive(sessionId, doc) {
+    Live.replayDoc = S.doc;
+    Live.sessionId = sessionId;
+    Live.events = doc.events.slice();
+    Live.queue = doc.events.slice();
+    Live.playedIndex = -1;
+    Live.prevState = initialState(doc);
+    Live.finished = false;
+    Live.battle = null;
+    Live.modes = { A: "auto", B: "auto" };
+    Live.activeSide = "A";
+    Live.keys.clear();
+    Live.attackPending = { A: false, B: false };
+    Live.state = null;
+    Live.tickDebt = 0;
+    Live.lastPoll = performance.now();
 
-    S.newBattlePending = true;
-    els.btnNew.textContent = "生成中…";
+    applyDocument(doc, { autoplay: false });
+    S.events = Live.events;
+    Live.active = true;
+    setLiveUI(true);
+    const token = S.token;
+    liveAnimate(token);
+    livePoll(token);
+    liveRender(token);
+  }
+
+  function teardownLiveSession() {
+    if (Live.sessionId) {
+      fetch(API_BASE + "api/session/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: Live.sessionId }),
+      }).catch(() => {});
+    }
+    Live.sessionId = null;
+    Live.active = false;
+    Live.keys.clear();
+    ["A", "B"].forEach((side) => S.scene.units[side].classList.remove("moving"));
+    setLiveUI(false);
+  }
+
+  function exitLive() {
+    const doc = Live.replayDoc;
+    teardownLiveSession();
+    if (doc) applyDocument(doc, { autoplay: true, delay: 300 });
+  }
+
+  function setLiveUI(on) {
+    els.btnLive.textContent = on ? "退出操控" : "实时操控";
+    els.btnLive.classList.toggle("is-active", on);
+    els.liveHint.hidden = !on;
+    els.progressHint.textContent = on
+      ? "实时操控中 · 战斗结束后仍可拖动回放"
+      : "可拖动定位任意事件";
+    els.logNote.textContent = on ? "实时战报 · 键盘操控中" : "按事件回放 · 可前后拖动";
+    ["A", "B"].forEach((side) => {
+      $("btn-mode-" + side).disabled = !on;
+      $("ap-gauge-" + side).hidden = !on;
+      $("control-active-" + side).hidden = true;
+      $("fighter-" + side).classList.remove("is-controlled");
+      S.scene.units[side].classList.remove("is-controlled");
+    });
+    if (on) {
+      updateModeButtons();
+      setActiveSide(Live.activeSide);
+    }
     updateButtons();
+  }
+
+  function updateModeButtons() {
+    ["A", "B"].forEach((side) => {
+      const button = $("btn-mode-" + side);
+      const manual = Live.modes[side] === "manual";
+      button.textContent = manual ? "手动" : "自动";
+      button.classList.toggle("is-manual", manual);
+      button.title = manual
+        ? "手动模式：仅响应键盘移动 / 攻击指令（点击切回自动）"
+        : "自动模式：AI 托管，键盘指令优先（点击切为手动）";
+    });
+  }
+
+  function toggleMode(side) {
+    if (!Live.active) return;
+    Live.modes[side] = Live.modes[side] === "manual" ? "auto" : "manual";
+    updateModeButtons();
+    S.scene.toast(
+      `${S.warriors[side].name} · ${Live.modes[side] === "manual" ? "手动操控" : "自动托管"}`,
+      { side }
+    );
+  }
+
+  function setActiveSide(side) {
+    if (!Live.active) return;
+    Live.activeSide = side;
+    ["A", "B"].forEach((item) => {
+      const on = item === side;
+      $("fighter-" + item).classList.toggle("is-controlled", on);
+      S.scene.units[item].classList.toggle("is-controlled", on);
+      $("control-active-" + item).hidden = !on;
+    });
+  }
+
+  function liveMoveDir() {
+    let dx = 0;
+    let dy = 0;
+    Live.keys.forEach((code) => {
+      const delta = MOVE_KEYS[code];
+      if (delta) {
+        dx += delta[0];
+        dy += delta[1];
+      }
+    });
+    dx = clamp(dx, -1, 1);
+    dy = clamp(dy, -1, 1);
+    return dx || dy ? [dx, dy] : null;
+  }
+
+  function buildLiveCommands() {
+    const dir = liveMoveDir();
+    const commands = {};
+    ["A", "B"].forEach((side) => {
+      commands[side] = {
+        mode: Live.modes[side],
+        move: side === Live.activeSide ? dir : null,
+        attack: Live.attackPending[side],
+      };
+      Live.attackPending[side] = false;
+    });
+    return commands;
+  }
+
+  function updateApGauges() {
+    if (!Live.state) return;
+    ["A", "B"].forEach((side) => {
+      const entry = Live.state[side];
+      if (!entry || !entry.ap) return;
+      const gauge = $("ap-gauge-" + side);
+      gauge.querySelector(".gauge-fill").style.width = `${(entry.ap.percent * 100).toFixed(1)}%`;
+      gauge.classList.toggle("is-ready", entry.ap.ready);
+      gauge.classList.toggle("is-backswing", entry.ap.phase === "backswing");
+      const label = entry.ap.ready ? "可攻击" : entry.ap.phase === "backswing" ? "收招" : "蓄力";
+      $("ap-value-" + side).textContent = label;
+      gauge.title = entry.ap.ready
+        ? "可攻击：按 J 出手"
+        : entry.ap.phase === "backswing"
+          ? "后摇恢复中"
+          : "前摇蓄力中";
+    });
+  }
+
+  function pressAttack() {
+    const side = Live.activeSide;
+    Live.attackPending[side] = true;
+    const entry = Live.state && Live.state[side];
+    if (!entry || !entry.ap || entry.ap.ready) return;
+    const other = Live.state[side === "A" ? "B" : "A"];
+    const reach = (S.warriors[side].weapon && S.warriors[side].weapon.reach) || 1;
+    let dist = 0;
+    if (entry.position && other && other.position) {
+      dist = Math.max(
+        Math.abs(entry.position[0] - other.position[0]),
+        Math.abs(entry.position[1] - other.position[1])
+      );
+    }
+    const text =
+      entry.ap.phase === "backswing" ? "收招中…" : dist > reach ? "射程外…" : "蓄力中…";
+    S.scene.toast(text, { side });
+  }
+
+  async function livePoll(token) {
+    while (Live.active && !Live.finished && token === S.token) {
+      const now = performance.now();
+      const dt = Math.min(0.5, (now - Live.lastPoll) / 1000);
+      Live.lastPoll = now;
+      if (!S.paused) {
+        Live.tickDebt += dt * LIVE_TICKS_PER_SEC * S.speed;
+        const ticks = Math.min(40, Math.floor(Live.tickDebt));
+        if (ticks >= 1) {
+          Live.tickDebt -= ticks;
+          try {
+            const response = await fetch(API_BASE + "api/session/step", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: Live.sessionId,
+                ticks,
+                commands: buildLiveCommands(),
+              }),
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok) throw new Error((data && data.error) || `HTTP ${response.status}`);
+            if (token !== S.token || !Live.active) return;
+            if (data.events.length) {
+              Live.events.push(...data.events);
+              Live.queue.push(...data.events);
+            }
+            Live.state = data.state;
+            updateApGauges();
+            if (data.finished) {
+              Live.finished = true;
+              Live.battle = data.battle;
+            }
+          } catch (error) {
+            if (token !== S.token || !Live.active) return;
+            console.error("实时推进失败:", error);
+            S.scene.toast("实时连接中断，已退出操控", { center: true });
+            exitLive();
+            return;
+          }
+        }
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, LIVE_POLL_MS));
+    }
+  }
+
+  /** 逐帧按最新轮询状态连续摆放武将：格内进度插值 + 帧间外推，按键后立即平滑移动 */
+  function liveRender(token) {
+    let last = performance.now();
+    const frame = (now) => {
+      if (!Live.active || token !== S.token) return;
+      const dt = Math.min(0.25, (now - last) / 1000);
+      last = now;
+      if (Live.state && !S.paused) {
+        S.scene.liveTick(Live.state, dt * S.speed);
+      }
+      window.requestAnimationFrame(frame);
+    };
+    window.requestAnimationFrame(frame);
+  }
+
+  async function liveAnimate(token) {
+    S.playing = true;
+    S.paused = false;
+    S.scene.setPaused(false);
+    updateButtons();
+    while (Live.active && token === S.token) {
+      if (S.paused) {
+        const ok = await waitForResume(token);
+        if (!ok || token !== S.token) return;
+      }
+      const ev = Live.queue.shift();
+      if (!ev) {
+        if (Live.finished) {
+          finishLive(S.events[S.events.length - 1]);
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 60));
+        continue;
+      }
+      Live.playedIndex += 1;
+      const before = Live.prevState;
+      Live.prevState = ev.state;
+      S.cursor = Live.playedIndex;
+      S.log.total = Live.events.length;
+      S.log.add(ev, Live.playedIndex);
+      setAction(ev);
+      setRoundTick(ev, false);
+      updatePosition(Live.playedIndex);
+
+      if (Live.queue.length > 6) {
+        // 积压过多时快进追平：直接落状态，不再逐条演出
+        S.scene.restore(ev.state);
+        Hud.apply(ev.state, { instant: true });
+      } else if (ev.type === "move") {
+        // 实时操控下站位由 liveRender 连续插值，move 事件不再逐格补间，避免演出排队叠加延迟
+        Hud.apply(ev.state, { effects: ev.effects });
+      } else {
+        await S.scene.animateEvent(ev, before, () => {
+          if (token !== S.token) return;
+          Hud.apply(ev.state, { effects: ev.effects });
+        });
+        if (token !== S.token) return;
+        if (ev.type !== "attack" && ev.type !== "clash") {
+          Hud.apply(ev.state, { effects: ev.effects });
+        }
+      }
+
+      if ((ev.type === "battle_end" || ev.type === "timeout") && Live.finished) {
+        finishLive(ev);
+        return;
+      }
+    }
+  }
+
+  function finishLive(ev) {
+    Live.finished = true;
+    S.doc.battle = Live.battle;
+    // 完整录制写回文档，保证之后退出操控 / 再开局时恢复的回放是整场战斗
+    S.doc.events = Live.events;
+    els.progress.max = String(Math.max(0, S.events.length - 1));
+    renderLeadReport(S.doc);
+    teardownLiveSession();
+    S.playing = false;
+    S.paused = false;
+    S.scene.setPaused(false);
+    showResult(ev);
+    updateButtons();
+  }
+
+  /* ================= 新局配置 ================= */
+
+  const Setup = {
+    options: null,
+    loading: null,
+    sides: { A: null, B: null },
+    pending: false,
+  };
+
+  function loadSetupOptions() {
+    if (Setup.options) return Promise.resolve(Setup.options);
+    if (!Setup.loading) {
+      Setup.loading = fetch(API_BASE + "api/options", { cache: "no-store" })
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.json();
+        })
+        .then((options) => {
+          Setup.options = options;
+          return options;
+        })
+        .catch((error) => {
+          Setup.loading = null;
+          throw error;
+        });
+    }
+    return Setup.loading;
+  }
+
+  function presetByName(name) {
+    return Setup.options.warriors.find((item) => item.name === name) || null;
+  }
+
+  function skillsForWarrior(name) {
+    return Setup.options.skills.filter(
+      (skill) => !skill.owner || skill.owner === name
+    );
+  }
+
+  function sideConfigFromDefaults(side) {
+    const defaults = Setup.options.defaults[side.toLowerCase()] || {};
+    const warrior =
+      defaults.warrior && presetByName(defaults.warrior)
+        ? defaults.warrior
+        : Setup.options.warriors[0].name;
+    const skills = {};
+    Setup.options.skills.forEach((skill) => {
+      const presetEnabled = defaults.skills ? defaults.skills[skill.id] : undefined;
+      skills[skill.id] = {
+        equipped: presetEnabled !== undefined,
+        enabled: presetEnabled !== false,
+      };
+    });
+    return { warrior, skills };
+  }
+
+  function resetSetupSides() {
+    Setup.sides.A = sideConfigFromDefaults("A");
+    Setup.sides.B = sideConfigFromDefaults("B");
+  }
+
+  function selectSetupWarrior(side, name) {
+    const config = Setup.sides[side];
+    if (config.warrior === name) return;
+    config.warrior = name;
+    const preset = presetByName(name);
+    Setup.options.skills.forEach((skill) => {
+      const presetEnabled = preset.skills[skill.id];
+      config.skills[skill.id] = {
+        equipped: presetEnabled !== undefined,
+        enabled: presetEnabled !== false,
+      };
+    });
+    renderSetupSide(side);
+  }
+
+  function renderSetupSide(side) {
+    const config = Setup.sides[side];
+    $("warrior-chips-" + side).innerHTML = Setup.options.warriors
+      .map((warrior) => {
+        const selected = warrior.name === config.warrior;
+        const portrait = window.WarriorArt.createPortrait(
+          window.WarriorArt.resolveStyle(warrior.name)
+        );
+        return `<button type="button" class="warrior-chip${selected ? " is-selected" : ""}" data-warrior="${esc(warrior.name)}" aria-pressed="${selected}">
+          <span class="chip-portrait">${portrait}</span>
+          <span class="chip-name">${esc(warrior.name)}</span>
+        </button>`;
+      })
+      .join("");
+
+    const preset = presetByName(config.warrior);
+    const labels = Setup.options.statLabels || {};
+    const statsHtml = Object.entries(preset.stats)
+      .map(
+        ([field, value]) =>
+          `<span>${esc(labels[field] || field)} <b>${esc(value)}</b></span>`
+      )
+      .join("");
+    $("setup-stats-" + side).innerHTML =
+      statsHtml +
+      (preset.weapon ? `<span>兵器 <b>${esc(preset.weapon)}</b></span>` : "");
+
+    $("skill-list-" + side).innerHTML = Setup.options.skills
+      .map((skill) => {
+        const state = config.skills[skill.id];
+        const available = !skill.owner || skill.owner === config.warrior;
+        const category = skill.owner ? `专属 · ${skill.owner}` : skill.category;
+        const switchHtml = available
+          ? `<button type="button" class="skill-switch${state.enabled ? " is-on" : ""}" data-skill="${esc(skill.id)}"${state.equipped ? "" : " hidden"}>${state.enabled ? "启用中" : "已关闭"}</button>`
+          : "";
+        return `<div class="skill-row${available ? "" : " is-locked"}${state.equipped && available ? "" : " is-off"}">
+          <label class="skill-check">
+            <input type="checkbox" data-skill="${esc(skill.id)}"${state.equipped && available ? " checked" : ""}${available ? "" : " disabled"} />
+            <span class="skill-name">${esc(skill.name)}<em class="skill-cat">${esc(category)}</em></span>
+          </label>
+          ${switchHtml}
+          <p class="skill-desc">${esc(skill.description)}${available ? "" : `（仅 ${esc(skill.owner)} 可装备）`}</p>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function renderSetup() {
+    renderSetupSide("A");
+    renderSetupSide("B");
+  }
+
+  function showSetupError(message) {
+    els.setupError.textContent = message;
+    els.setupError.hidden = false;
+  }
+
+  async function openSetup() {
+    if (S.playing && !S.paused) togglePause();
+    els.setupOverlay.hidden = false;
+    els.setupError.hidden = true;
     try {
-      const response = await fetch("api/battle", { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const doc = await response.json();
+      await loadSetupOptions();
+    } catch (error) {
+      console.error("加载武将配置失败:", error);
+      showSetupError("无法加载武将配置，请确认已运行 python main.py --serve-web");
+      return;
+    }
+    if (!Setup.sides.A || !Setup.sides.B) resetSetupSides();
+    renderSetup();
+  }
+
+  function closeSetup() {
+    els.setupOverlay.hidden = true;
+  }
+
+  async function startSetupBattle() {
+    if (Setup.pending) return;
+    Setup.pending = true;
+    els.btnSetupStart.disabled = true;
+    els.btnSetupStart.textContent = "生成中…";
+    els.setupError.hidden = true;
+    try {
+      const params = new URLSearchParams();
+      ["A", "B"].forEach((side) => {
+        const config = Setup.sides[side];
+        const key = side.toLowerCase();
+        params.set(`${key}_warrior`, config.warrior);
+        const available = new Set(
+          skillsForWarrior(config.warrior).map((skill) => skill.id)
+        );
+        const skills = Object.entries(config.skills)
+          .filter(([id, state]) => state.equipped && available.has(id))
+          .map(([id, state]) => (state.enabled ? id : `${id}:0`));
+        params.set(`${key}_skills`, skills.join(","));
+      });
+      const response = await fetch(API_BASE + "api/battle?" + params.toString(), {
+        cache: "no-store",
+      });
+      const doc = await response.json().catch(() => null);
+      if (!response.ok) throw new Error((doc && doc.error) || `HTTP ${response.status}`);
       if (!isBattleDocument(doc)) throw new Error("战斗数据格式不正确");
+      closeSetup();
+      if (Live.active) teardownLiveSession();
       applyDocument(doc, { autoplay: true });
       els.actionText.textContent = "新战局已生成，战斗即将开始";
     } catch (error) {
       console.error("生成新战局失败:", error);
-      els.actionText.textContent = "生成新战局失败，请确认本地服务仍在运行";
+      showSetupError(error.message || "生成新战局失败，请确认本地服务仍在运行");
     } finally {
-      S.newBattlePending = false;
-      els.btnNew.textContent = "新的一局";
-      updateButtons();
+      Setup.pending = false;
+      els.btnSetupStart.disabled = false;
+      els.btnSetupStart.textContent = "开战";
     }
+  }
+
+  function bindSetupControls() {
+    $("btn-setup-close").addEventListener("click", closeSetup);
+    $("btn-setup-cancel").addEventListener("click", closeSetup);
+    $("btn-setup-reset").addEventListener("click", () => {
+      if (!Setup.options) return;
+      resetSetupSides();
+      els.setupError.hidden = true;
+      renderSetup();
+    });
+    els.btnSetupStart.addEventListener("click", startSetupBattle);
+    els.setupOverlay.addEventListener("click", (event) => {
+      if (event.target === els.setupOverlay) closeSetup();
+    });
+
+    ["A", "B"].forEach((side) => {
+      $("warrior-chips-" + side).addEventListener("click", (event) => {
+        const chip = event.target.closest(".warrior-chip");
+        if (chip) selectSetupWarrior(side, chip.dataset.warrior);
+      });
+      $("skill-list-" + side).addEventListener("change", (event) => {
+        const input = event.target;
+        if (!input.matches("input[data-skill]")) return;
+        const state = Setup.sides[side].skills[input.dataset.skill];
+        state.equipped = input.checked;
+        if (input.checked) state.enabled = true;
+        renderSetupSide(side);
+      });
+      $("skill-list-" + side).addEventListener("click", (event) => {
+        const button = event.target.closest(".skill-switch");
+        if (!button) return;
+        const state = Setup.sides[side].skills[button.dataset.skill];
+        state.enabled = !state.enabled;
+        renderSetupSide(side);
+      });
+    });
   }
 
   /* ================= 初始化 ================= */
@@ -740,7 +1326,11 @@
 
   function bindControls() {
     els.btnPlay.addEventListener("click", togglePlay);
-    els.btnNew.addEventListener("click", newBattle);
+    els.btnNew.addEventListener("click", openSetup);
+    els.btnLive.addEventListener("click", () => {
+      if (Live.active) exitLive();
+      else startLive();
+    });
     els.btnReplay.addEventListener("click", replay);
     els.btnPrev.addEventListener("click", () => seekTo(S.cursor - 1));
     els.btnEnd.addEventListener("click", () => seekTo(S.events.length - 1));
@@ -749,7 +1339,17 @@
       event.currentTarget.classList.toggle("is-active", on);
     });
     $("btn-result-replay").addEventListener("click", replay);
-    els.btnResultNew.addEventListener("click", newBattle);
+    els.btnResultNew.addEventListener("click", openSetup);
+    bindSetupControls();
+
+    ["A", "B"].forEach((side) => {
+      $("btn-mode-" + side).addEventListener("click", () => toggleMode(side));
+      S.scene.units[side].addEventListener("click", () => setActiveSide(side));
+      $("fighter-" + side).addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        setActiveSide(side);
+      });
+    });
 
     document.querySelectorAll(".speed-btn").forEach((button) => {
       button.addEventListener("click", () => {
@@ -772,7 +1372,36 @@
     });
 
     document.addEventListener("keydown", (event) => {
+      if (!els.setupOverlay.hidden) {
+        if (event.key === "Escape") closeSetup();
+        return;
+      }
       if (event.target && event.target.tagName === "INPUT") return;
+      if (Live.active) {
+        if (MOVE_KEYS[event.code]) {
+          event.preventDefault();
+          Live.keys.add(event.code);
+          return;
+        }
+        if (event.code === "KeyJ") {
+          event.preventDefault();
+          if (!event.repeat) pressAttack();
+          return;
+        }
+        if (event.code === "Digit1" || event.code === "Numpad1") {
+          setActiveSide("A");
+          return;
+        }
+        if (event.code === "Digit2" || event.code === "Numpad2") {
+          setActiveSide("B");
+          return;
+        }
+        if (event.code === "Tab") {
+          event.preventDefault();
+          setActiveSide(Live.activeSide === "A" ? "B" : "A");
+          return;
+        }
+      }
       if (event.key === " ") {
         event.preventDefault();
         togglePlay();
@@ -784,10 +1413,15 @@
         seekTo(S.cursor + 1);
       }
     });
+
+    document.addEventListener("keyup", (event) => {
+      Live.keys.delete(event.code);
+    });
+    window.addEventListener("blur", () => Live.keys.clear());
   }
 
   async function boot() {
-    let doc;
+    let doc = null;
     try {
       doc = await loadBattle();
     } catch (error) {
@@ -804,13 +1438,6 @@
     S.scene = new window.BattleScene();
     bindControls();
     applyDocument(doc, { autoplay: true, delay: 700 });
-
-    S.canNewBattle = await probeNewBattle();
-    if (!S.canNewBattle) {
-      const hint = "需用 python main.py --serve-web 启动本地服务";
-      els.btnNew.title = hint;
-      els.btnResultNew.title = hint;
-    }
     updateButtons();
   }
 

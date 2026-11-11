@@ -7,12 +7,15 @@ A* 使用 heapq 全序 tie-break，不含任何随机，同输入必得同路径
 """
 
 import heapq
+import math
 from dataclasses import dataclass
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple
 
+from src.constants import LOS_SAMPLE_STEP
 from src.enums import Terrain
 
 Cell = Tuple[int, int]
+Point = Tuple[float, float]
 
 # 8 向邻居，固定顺序保证确定性
 _DIRECTIONS: Tuple[Cell, ...] = (
@@ -24,9 +27,19 @@ _DIRECTIONS: Tuple[Cell, ...] = (
 _TERRAIN_BY_CHAR = {".": Terrain.PLAIN, "#": Terrain.ROCK, "x": Terrain.BOUNDARY}
 
 
-def chebyshev_distance(a: Cell, b: Cell) -> int:
-    """切比雪夫距离：与 8 向移动、格子高亮天然对齐"""
+def chebyshev_distance(a: Point, b: Point) -> float:
+    """切比雪夫距离：支持整数格与浮点坐标，与 8 向移动、格子高亮对齐"""
     return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+
+
+def cell_center(cell: Cell) -> Point:
+    """格子中心坐标：格 (x, y) 覆盖 [x, x+1) × [y, y+1)"""
+    return (cell[0] + 0.5, cell[1] + 0.5)
+
+
+def cell_at(point: Point) -> Cell:
+    """浮点坐标所在的格子"""
+    return (math.floor(point[0]), math.floor(point[1]))
 
 
 def bresenham_cells(a: Cell, b: Cell) -> List[Cell]:
@@ -105,11 +118,75 @@ class BattleMap:
     def spawn(self, side: str) -> Cell:
         return self.spawn_a if side == "A" else self.spawn_b
 
+    def spawn_point(self, side: str) -> Point:
+        """出生点对应的浮点坐标（格心）"""
+        return cell_center(self.spawn(side))
+
     def in_bounds(self, cell: Cell) -> bool:
         return 0 <= cell[0] < self.width and 0 <= cell[1] < self.height
 
     def is_walkable(self, cell: Cell) -> bool:
         return self.in_bounds(cell) and self.grid[cell[1]][cell[0]] is Terrain.PLAIN
+
+    def is_point_walkable(self, x: float, y: float, radius: float = 0.0) -> bool:
+        """浮点坐标是否可站立：半径大于 0 时视为圆形身体，禁止压到障碍或出界"""
+        if radius <= 0:
+            return self.is_walkable(cell_at((x, y)))
+        x0 = math.floor(x - radius)
+        x1 = math.floor(x + radius)
+        y0 = math.floor(y - radius)
+        y1 = math.floor(y + radius)
+        for cy in range(y0, y1 + 1):
+            for cx in range(x0, x1 + 1):
+                if self.is_walkable((cx, cy)):
+                    continue
+                nearest_x = min(max(x, cx), cx + 1)
+                nearest_y = min(max(y, cy), cy + 1)
+                if (x - nearest_x) ** 2 + (y - nearest_y) ** 2 < radius * radius - 1e-12:
+                    return False
+        return True
+
+    def move_point(
+        self,
+        x: float,
+        y: float,
+        dx: float,
+        dy: float,
+        radius: float = 0.0,
+        max_substep: float = 0.1,
+    ) -> Point:
+        """连续移动并处理碰撞：整步不可行时按 X/Y 轴分离滑动，逐步细分防穿越"""
+        length = math.hypot(dx, dy)
+        if length <= 0:
+            return (x, y)
+        steps = max(1, math.ceil(length / max_substep))
+        sx = dx / steps
+        sy = dy / steps
+        for _ in range(steps):
+            if self.is_point_walkable(x + sx, y + sy, radius):
+                x += sx
+                y += sy
+            elif abs(sx) > 0 and self.is_point_walkable(x + sx, y, radius):
+                x += sx
+            elif abs(sy) > 0 and self.is_point_walkable(x, y + sy, radius):
+                y += sy
+            else:
+                break
+        return (x, y)
+
+    def has_line_of_sight_points(self, a: Point, b: Point) -> bool:
+        """浮点视线：沿线段采样，任一采样点落在障碍格内即视为遮挡"""
+        ax, ay = a
+        bx, by = b
+        distance = math.hypot(bx - ax, by - ay)
+        if distance <= 1e-9:
+            return True
+        samples = max(1, math.ceil(distance / LOS_SAMPLE_STEP))
+        for index in range(1, samples):
+            t = index / samples
+            if not self.is_point_walkable(ax + (bx - ax) * t, ay + (by - ay) * t):
+                return False
+        return True
 
     def neighbors(self, cell: Cell) -> List[Cell]:
         """可通行的 8 向邻居；斜向不允许穿过两侧都是障碍的墙角"""
@@ -162,18 +239,34 @@ class BattleMap:
         reach: int,
         occupied: FrozenSet[Cell] = frozenset(),
     ) -> Optional[List[Cell]]:
-        """走到「能打到的位置」就停：终点需满足 距离<=射程、视线通畅、可站立"""
+        """走到目标格射程内的格心位置就停（格子语义，保留给寻路测试）"""
+        return self.find_path_to_point_range(
+            start, cell_center(target), reach, occupied=occupied
+        )
+
+    def find_path_to_point_range(
+        self,
+        start: Cell,
+        target: Point,
+        reach: int,
+        occupied: FrozenSet[Cell] = frozenset(),
+    ) -> Optional[List[Cell]]:
+        """走到「从格心能打到浮点目标」的位置：距离<=射程、视线通畅、可站立"""
         def is_goal(cell: Cell) -> bool:
+            if cell in occupied:
+                return False
+            center = cell_center(cell)
             return (
-                cell not in occupied
-                and chebyshev_distance(cell, target) <= reach
-                and self.has_line_of_sight(cell, target)
+                chebyshev_distance(center, target) <= reach
+                and self.has_line_of_sight_points(center, target)
             )
 
         return self._astar(
             start,
             is_goal=is_goal,
-            heuristic=lambda cell: max(0, chebyshev_distance(cell, target) - reach),
+            heuristic=lambda cell: max(
+                0.0, chebyshev_distance(cell_center(cell), target) - reach
+            ),
             occupied=occupied,
         )
 
@@ -181,7 +274,7 @@ class BattleMap:
         self,
         start: Cell,
         is_goal: Callable[[Cell], bool],
-        heuristic: Callable[[Cell], int],
+        heuristic: Callable[[Cell], float],
         occupied: FrozenSet[Cell],
     ) -> Optional[List[Cell]]:
         if is_goal(start):
@@ -221,7 +314,10 @@ class BattleMap:
             "name": self.name,
             "width": self.width,
             "height": self.height,
-            "spawns": {"A": list(self.spawn_a), "B": list(self.spawn_b)},
+            "spawns": {
+                "A": list(self.spawn_point("A")),
+                "B": list(self.spawn_point("B")),
+            },
             "obstacles": sorted([x, y] for x, y in self.obstacles),
             "rocks": sorted([x, y] for x, y in self.rocks),
         }

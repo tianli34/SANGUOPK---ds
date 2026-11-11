@@ -54,13 +54,15 @@ class WarriorSnapshot:
     ap: float
     # 已装备特技（名称+效果描述）
     skills: tuple = ()
+    # 已装备特技的结构化信息（分类、归属、开关状态）
+    skill_infos: tuple = ()
     # 兵器
     weapon_name: str = ""
     weapon_category: Optional[int] = None
     weapon_category_label: str = ""
-    # 射程与站位（无地图的战斗 position 为 None）
+    # 射程与站位（无地图的战斗 position 为 None；有地图时为浮点格坐标）
     reach: int = UNARMED_REACH
-    position: Optional[Tuple[int, int]] = None
+    position: Optional[Tuple[float, float]] = None
 
 
 class Warrior:
@@ -98,9 +100,9 @@ class Warrior:
         self.attack_phase = AttackPhase.WINDUP  # 初始为前摇阶段
 
         # 空间状态（由战斗引擎布阵/驱动，无地图时保持 None/空）
-        self.position: Optional[Tuple[int, int]] = None  # 网格站位
-        self.move_path: List[Tuple[int, int]] = []  # 剩余路径（不含当前格）
-        self.move_progress = 0.0  # 当前格的移动进度
+        self.position: Optional[Tuple[float, float]] = None  # 浮点站位（格为单位）
+        self.move_path: List[Tuple[int, int]] = []  # AI 剩余路点（格子），走到格心
+        self.manual_moving = False  # 手动连续移动中（没有路点）
 
         # 初始化武将的运行时状态_基础属性(四维属性)
         self.martialarts_init = max(1, martialarts)  # 武艺，最小值为1
@@ -130,6 +132,7 @@ class Warrior:
             attack_phase=self.attack_phase,
             ap=self.ap,
             skills=self.skill_descriptions,
+            skill_infos=self.skill_infos,
             weapon_name=self.weapon.name if self.weapon else "",
             weapon_category=self.weapon.category.value if self.weapon else None,
             weapon_category_label=self.weapon.category_label if self.weapon else "",
@@ -168,42 +171,37 @@ class Warrior:
         return MOVE_SPEED_BASE + self.agility
 
     @property
+    def move_speed_cells(self) -> float:
+        """移动速度换算为格/秒"""
+        return self.move_speed / MOVE_CELL_PROGRESS
+
+    @property
     def is_moving(self) -> bool:
-        """是否正在沿路径移动"""
-        return bool(self.move_path)
+        """是否正在移动（AI 路点或手动连续移动）"""
+        return bool(self.move_path) or self.manual_moving
 
     def begin_move(self, path: List[Tuple[int, int]]) -> bool:
-        """开始移动：重置前摇；后摇期间锁定站位不能移动"""
+        """开始沿路点移动：重置前摇；后摇期间锁定站位不能移动"""
         if not self.is_alive or self.is_in_backswing() or not path:
             return False
         self.ap = 0.0  # 起手移动打断前摇
         self.move_path = list(path)
-        self.move_progress = 0.0
+        self.manual_moving = False
         return True
 
-    def tick_move(self, tick_rate: float) -> Optional[Tuple[int, int]]:
-        """累积移动进度，返回本 tick 走完格子后的新站位（未走完整格返回 None）"""
-        if not self.is_alive or not self.is_moving:
-            return None
-        self.move_progress += self.move_speed * tick_rate
-        advanced = None
-        while self.move_progress >= MOVE_CELL_PROGRESS and self.move_path:
-            self.move_progress -= MOVE_CELL_PROGRESS
-            advanced = self.advance_cell()
-        if not self.move_path:
-            self.move_progress = 0.0
-        return advanced
-
-    def advance_cell(self) -> Tuple[int, int]:
-        """走进路径的下一格"""
-        next_cell = self.move_path.pop(0)
-        self.position = next_cell
-        return next_cell
+    def begin_manual_move(self) -> bool:
+        """开始手动连续移动：重置前摇；后摇期间锁定站位不能移动"""
+        if not self.is_alive or self.is_in_backswing():
+            return False
+        if not self.manual_moving:
+            self.ap = 0.0
+            self.manual_moving = True
+        return True
 
     def stop_move(self) -> None:
-        """停止移动，清空路径与进度"""
+        """停止移动：清空路点与手动移动状态"""
         self.move_path = []
-        self.move_progress = 0.0
+        self.manual_moving = False
 
     @property
     def attack_power(self) -> float:
@@ -258,24 +256,86 @@ class Warrior:
         self.ap += amount
 
     def equip_skill(self, skill: "Skill") -> bool:
-        """装备特技；同 id 特技只能装备一个"""
+        """装备特技；同 id 只能装备一个，专属特技只能由归属武将装备"""
+        if not skill.can_equip(self):
+            return False
         if any(s.skill_id == skill.skill_id for s in self.skills):
             return False
         self.skills.append(skill)
+        self.enforce_courage_floor()
         return True
 
     def unequip_skill(self, skill_id: str) -> bool:
         """卸下指定特技，返回是否卸下成功"""
         for index, skill in enumerate(self.skills):
             if skill.skill_id == skill_id:
+                self.skills[index].on_unequip(self)
                 del self.skills[index]
                 return True
         return False
 
     @property
+    def active_skills(self) -> list:
+        """当前开启的特技（关闭的特技不参与任何战斗结算）"""
+        return [skill for skill in self.skills if skill.enabled]
+
+    def set_skill_enabled(self, skill_id: str, enabled: bool) -> bool:
+        """切换指定特技的开关，返回是否找到该特技"""
+        for skill in self.skills:
+            if skill.skill_id != skill_id:
+                continue
+            if skill.enabled != enabled:
+                skill.set_enabled(enabled)
+                skill.on_toggle(self, enabled)
+                self.enforce_courage_floor()
+            return True
+        return False
+
+    def toggle_skill(self, skill_id: str):
+        """翻转指定特技的开关，返回切换后的状态；未装备时返回 None"""
+        for skill in self.skills:
+            if skill.skill_id == skill_id:
+                self.set_skill_enabled(skill_id, not skill.enabled)
+                return skill.enabled
+        return None
+
+    @property
+    def courage_floor(self) -> Optional[int]:
+        """所有开启特技提供的胆气下限中的最高值"""
+        floors = [
+            floor
+            for skill in self.active_skills
+            if (floor := skill.courage_floor(self)) is not None
+        ]
+        return max(floors) if floors else None
+
+    def enforce_courage_floor(self) -> bool:
+        """把胆气抬升到特技下限，返回是否发生变化"""
+        floor = self.courage_floor
+        if floor is None:
+            return False
+        target = max(1, min(COURAGE_CAP, floor))
+        if self.courage >= target:
+            return False
+        self.courage = target
+        return True
+
+    def damage_dealt_multiplier(self, round_num: int) -> float:
+        """本次造成伤害的总倍率（所有开启特技的倍率相乘）"""
+        multiplier = 1.0
+        for skill in self.active_skills:
+            multiplier *= skill.damage_dealt_multiplier(self, round_num)
+        return multiplier
+
+    @property
     def skill_descriptions(self) -> tuple:
         """特技展示文本，用于战报初始属性"""
-        return tuple(f"{s.name}（{s.description}）" for s in self.skills)
+        return tuple(skill.display_text for skill in self.skills)
+
+    @property
+    def skill_infos(self) -> tuple:
+        """特技结构化信息，用于网页展示开关状态"""
+        return tuple(skill.to_dict() for skill in self.skills)
 
     @property
     def weapon_description(self) -> str:
@@ -344,8 +404,9 @@ class Warrior:
         return int(((10 + self.strength * 0.1) / (1 + self.martialarts * 0.01 + self.agility * 0.005) * (1.6 - self.courage* 0.8/120))/math.sqrt(max(0.001, self.hp_percent)))
 
     def modify_courage(self, amount: int) -> None:
-        """在限制范围内修改胆气"""
+        """在限制范围内修改胆气，并保证不低于特技提供的下限"""
         self.courage = max(1, min(COURAGE_CAP, self.courage + amount))
+        self.enforce_courage_floor()
 
     def choose_defense(self, attacker: Optional["Warrior"] = None) -> DefenseType:
         """AI根据加权属性选择防御类型"""

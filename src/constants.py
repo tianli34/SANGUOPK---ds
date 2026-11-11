@@ -39,6 +39,11 @@ MAX_TICKS = 30000  # 最大时间刻度（防止无限循环）
 MOVE_SPEED_BASE = 50  # 移速基础值（移速 = 基础值 + 当前敏捷）
 MOVE_CELL_PROGRESS = 100  # 走完一格所需的移动进度
 
+# 连续站位（单位均为格）
+UNIT_RADIUS = 0.3  # 单位碰撞半径：身体不能压到障碍或出界
+UNIT_SEPARATION = 0.6  # 单位之间最小中心距，避免互相重叠
+LOS_SAMPLE_STEP = 0.1  # 浮点视线采样步长
+
 # 防御参数
 DEFENSE_PARAMS = {
     "block": {  # 格挡
