@@ -20,7 +20,7 @@ from src import (
     get_map,
     get_weapon,
 )
-from src.constants import TICK_RATE, UNIT_RADIUS
+from src.constants import TICK_RATE, UNIT_RADIUS, WINDUP_BAR
 from src.event_exporter import build_battle_document
 from src.map import bresenham_cells, cell_at, cell_center
 
@@ -269,12 +269,14 @@ class MovementTest(unittest.TestCase):
         warrior.stop_move()
         self.assertFalse(warrior.is_moving)
 
-    def test_no_ap_and_no_attack_while_moving(self):
+    def test_ap_accumulates_while_moving(self):
+        """移动中照样积累行动点，但仍然不能出手"""
         warrior = make_warrior()
         warrior.position = (2, 3)
         warrior.begin_move([(3, 3)])
         warrior.tick_ap(TICK_RATE)
-        self.assertEqual(warrior.ap, 0.0)
+        self.assertGreater(warrior.ap, 0.0)
+        self.assertFalse(warrior.can_attack())
         warrior.ap = 500.0
         self.assertFalse(warrior.can_attack())
         warrior.stop_move()
@@ -341,6 +343,79 @@ class EngineIntegrationTest(unittest.TestCase):
                 self.assertNotIn("position", entry)
             if log.event_type == "attack":
                 self.assertNotIn("attack_distance", log.details)
+
+
+class WhiffAttackTest(unittest.TestCase):
+    """射程外挥刀：允许出手，但只是空挥，不产生攻防判定"""
+
+    def make_engine(self):
+        random.seed(7)
+        warrior_a = make_warrior(
+            "马超", "A", agility=98, weapon=get_weapon("虎头湛金枪")
+        )
+        warrior_b = make_warrior(
+            "许褚", "B", strength=99, weapon=get_weapon("血煞虎头刀")
+        )
+        engine = BattleEngine([warrior_a], [warrior_b], battle_map=get_default_map())
+        engine.begin()
+        warrior_a.position = (2.5, 3.5)
+        warrior_b.position = (10.5, 3.5)
+        engine.overrides[warrior_a.name] = {
+            "mode": "manual", "move": None, "attack": True,
+        }
+        engine.overrides[warrior_b.name] = {
+            "mode": "manual", "move": None, "attack": False,
+        }
+        warrior_a.ap = WINDUP_BAR
+        warrior_b.ap = WINDUP_BAR
+        return engine, warrior_a, warrior_b
+
+    def test_out_of_range_swing_only_whiffs(self):
+        engine, warrior_a, warrior_b = self.make_engine()
+        hp_before = warrior_b.hp
+        sp_before = warrior_a.sp
+
+        engine.run_tick()
+
+        types = [log.event_type for log in engine.logs]
+        self.assertIn("whiff", types)
+        self.assertNotIn("attack", types)
+        self.assertNotIn("clash", types)
+
+        whiff = next(log for log in engine.logs if log.event_type == "whiff")
+        self.assertEqual(whiff.details["attacker"], "马超")
+        self.assertTrue(whiff.details["out_of_range"])
+        self.assertEqual(whiff.details["attack_distance"], 8)
+        self.assertEqual(whiff.details["attacker_reach"], 1)
+
+        # 对手毫发无伤，出手方付出体力并进入后摇
+        self.assertEqual(warrior_b.hp, hp_before)
+        self.assertLess(warrior_a.sp, sp_before)
+        self.assertTrue(warrior_a.is_in_backswing())
+        self.assertFalse(engine.overrides["马超"]["attack"])
+
+    def test_out_of_range_pair_does_not_clash(self):
+        """双方都在射程外时凑不成拼刀，各自空挥"""
+        engine, warrior_a, warrior_b = self.make_engine()
+        engine.overrides["许褚"]["attack"] = True
+
+        engine.run_tick()
+
+        types = [log.event_type for log in engine.logs]
+        self.assertNotIn("clash", types)
+        self.assertEqual(types.count("whiff"), 2)
+
+    def test_in_range_swing_still_lands(self):
+        """射程内不受影响：仍然是正常的攻防判定"""
+        engine, warrior_a, warrior_b = self.make_engine()
+        warrior_a.position = (5.5, 3.5)
+        warrior_b.position = (6.5, 3.5)
+
+        engine.run_tick()
+
+        types = [log.event_type for log in engine.logs]
+        self.assertIn("attack", types)
+        self.assertNotIn("whiff", types)
 
 
 class ExportTest(unittest.TestCase):

@@ -475,6 +475,37 @@ body {
   white-space: nowrap;
 }
 
+/* 战斗用时计时器：数值随事件 tick 推进，回退 / 重新播放时一起归零 */
+.battle-clock {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 9px 2px;
+  border: 1px solid rgba(216, 183, 108, 0.26);
+  border-radius: 999px;
+  background: rgba(216, 183, 108, 0.07);
+  box-shadow: 0 0 14px rgba(216, 183, 108, 0.08) inset;
+  white-space: nowrap;
+}
+.clock-tag {
+  font-family: var(--kai);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--muted-2);
+}
+.clock-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--gold-bright);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 12px rgba(216, 183, 108, 0.25);
+}
+.battle-clock.is-running .clock-value {
+  color: #f4e2b6;
+}
+
 .lead-strip {
   display: flex;
   justify-content: center;
@@ -1758,6 +1789,8 @@ body {
   .fighter-name { font-size: 19px; }
   .gauge-value { font-size: 14px; min-width: 44px; }
   .hud-center .vs-mark { width: 34px; height: 34px; }
+  .battle-clock { padding: 0 7px 1px; gap: 4px; }
+  .clock-value { font-size: 12px; }
   .arena { --arena-h: max(300px, 62vw); }
   .unit { width: 38%; left: 8%; bottom: 3%; }
   .unit--B { right: 8%; left: auto; }

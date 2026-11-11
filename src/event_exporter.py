@@ -178,6 +178,21 @@ def build_event(log, index: int, previous: dict, side_by_name: dict):
                 float(details.get("defender_damage_multiplier", 1.0)), 3
             ),
         }
+    elif log.event_type == "whiff":
+        event["actor"] = {
+            "name": details.get("attacker"),
+            "side": actor_side,
+        }
+        event["defender"] = {
+            "name": details.get("defender"),
+            "side": defender_side,
+        }
+        event["whiff"] = {
+            "reason": details.get("whiff_reason", "range"),
+            "distance": round(float(details.get("attack_distance", 0)), 1),
+            "reach": details.get("attacker_reach"),
+            "spCost": round(float(details.get("attacker_sp_cost", 0)), 2),
+        }
     elif log.event_type == "clash":
         event["clash"] = {
             "participants": details.get("participants", []),

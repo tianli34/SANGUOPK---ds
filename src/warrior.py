@@ -181,20 +181,20 @@ class Warrior:
         return bool(self.move_path) or self.manual_moving
 
     def begin_move(self, path: List[Tuple[int, int]]) -> bool:
-        """开始沿路点移动：重置前摇；后摇期间锁定站位不能移动"""
+        """开始沿路点移动：起手打断前摇（AP 归零后重新累积）；后摇期间锁定站位不能移动"""
         if not self.is_alive or self.is_in_backswing() or not path:
             return False
-        self.ap = 0.0  # 起手移动打断前摇
+        self.ap = 0.0  # 起手移动打断前摇，AP 从零开始重新积累
         self.move_path = list(path)
         self.manual_moving = False
         return True
 
     def begin_manual_move(self) -> bool:
-        """开始手动连续移动：重置前摇；后摇期间锁定站位不能移动"""
+        """开始手动连续移动：起手打断前摇（AP 归零后重新累积）；后摇期间锁定站位不能移动"""
         if not self.is_alive or self.is_in_backswing():
             return False
         if not self.manual_moving:
-            self.ap = 0.0
+            self.ap = 0.0  # 起手移动打断前摇，AP 从零开始重新积累
             self.manual_moving = True
         return True
 
@@ -247,8 +247,8 @@ class Warrior:
             self.ap_bonus_count = 1
 
     def tick_ap(self, tick_rate: float) -> None:
-        """根据攻击速度累积行动点数（移动中不攒 AP）"""
-        if self.is_alive and not self.is_moving:
+        """根据攻击速度累积行动点数（移动中同样累积，但移动中仍不能出手）"""
+        if self.is_alive:
             self.ap += self.attack_speed * tick_rate
 
     def gain_ap(self, amount: float) -> None:
@@ -343,7 +343,7 @@ class Warrior:
         return self.weapon.description if self.weapon else ""
 
     def can_attack(self) -> bool:
-        """检查是否可以发起攻击（前摇阶段且达到前摇阈值，移动中不能攻击）"""
+        """检查是否可以挥刀（前摇完成；蓄力可在移动中累积，但移动中不能出手）"""
         return (
             self.is_alive
             and not self.is_moving

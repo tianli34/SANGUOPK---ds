@@ -101,6 +101,8 @@ class BattleReporter:
         for log in round_logs:
             if log.event_type == "attack":
                 lines.append(self._format_attack_log(log))
+            elif log.event_type == "whiff":
+                lines.append(self._format_whiff_log(log))
             elif log.event_type == "clash":
                 lines.append(self._format_clash_log(log))
             elif log.event_type == "move":
@@ -169,7 +171,7 @@ class BattleReporter:
         attack_distance = details.get("attack_distance")
         if attack_distance is not None:
             lines.append(
-                f"    攻击距离: {attack_distance} 格（射程 {details.get('attacker_reach')} 格）"
+                f"    攻击距离: {attack_distance:.1f} 格（射程 {details.get('attacker_reach')} 格）"
             )
         if defender_ap_percent is not None:
             lines.append(f"    防守方AP: {defender_ap_percent * 100:.1f}%")
@@ -207,6 +209,26 @@ class BattleReporter:
         if not details.get("attacker_alive", True):
             lines.append(f"    ☠ {attacker} 阵亡!")
 
+        return "\n".join(lines)
+
+    def _format_whiff_log(self, log: "BattleLog") -> str:
+        """射程外挥刀：只打出招消耗，没有攻防判定"""
+        details = log.details
+        attacker = details.get("attacker", "未知")
+        defender = details.get("defender", "未知")
+
+        lines = []
+        lines.append(f"\n  ⚔ {attacker} → {defender}（挥刀落空）")
+        attack_distance = details.get("attack_distance")
+        if attack_distance is not None:
+            lines.append(
+                f"    攻击距离: {attack_distance:.1f} 格（射程 {details.get('attacker_reach')} 格）"
+            )
+        if details.get("whiff_reason") == "los":
+            lines.append("    原因: 视线被地形遮挡")
+        sp_cost = details.get("attacker_sp_cost")
+        if sp_cost:
+            lines.append(f"    {attacker} SP -{sp_cost:.0f}（出招消耗）")
         return "\n".join(lines)
 
     def _format_clash_log(self, log: "BattleLog") -> str:

@@ -511,6 +511,9 @@
         case "attack":
           await this.attack(ev, beforeState, onImpact, gen);
           break;
+        case "whiff":
+          await this.whiff(ev, onImpact, gen);
+          break;
         case "move":
           await this.moveUnit(ev, gen);
           break;
@@ -594,6 +597,31 @@
 
       await this.reactToDeaths(ev, beforeState);
       await this.both([atkPose, defPose, ...hits]);
+    }
+
+    /** 射程外挥刀：只演出手起刀落，没有命中火花与伤害数字 */
+    async whiff(ev, onImpact, gen) {
+      const atk = ev.actor && ev.actor.side;
+      if (!atk || !this.units[atk]) {
+        await this.wait(this.ms(240));
+        return;
+      }
+      const atkPose = this.pose(atk, "attacking", 620);
+      await this.wait(this.ms(210));
+      if (gen !== this.generation) return;
+
+      let x = atk === "A" ? 55 : 45;
+      let y = 45;
+      const dir = this.facingDir(atk);
+      if (this.map && this.positions[atk]) {
+        const anchor = this.anchorPercent(atk);
+        x = anchor.x + dir * 7;
+        y = anchor.y - 4;
+      }
+      this.slash(x, y, dir === -1);
+      this.toast("落空", { side: atk });
+      if (onImpact) onImpact();
+      await atkPose;
     }
 
     async clash(ev, beforeState, onImpact, gen) {

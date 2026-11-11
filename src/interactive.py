@@ -165,6 +165,11 @@ class BattleSession:
             if warrior.position is not None:
                 entry["position"] = list(warrior.position)
                 entry["moving"] = warrior.is_moving
+            target = self.engine._find_target(warrior)
+            in_range = target is not None and (
+                self.engine.battle_map is None
+                or self.engine._can_reach(warrior, target)
+            )
             if warrior.attack_phase == AttackPhase.BACKSWING:
                 bar = BACKSWING_BAR + warrior.backswing_extra
                 percent = min(1.0, warrior.ap / bar) if bar > 0 else 1.0
@@ -173,15 +178,12 @@ class BattleSession:
             else:
                 percent = min(1.0, warrior.ap / WINDUP_BAR)
                 phase = "windup"
-                target = self.engine._find_target(warrior)
-                ready = warrior.can_attack() and (
-                    self.engine.battle_map is None
-                    or (target is not None and self.engine._can_reach(warrior, target))
-                )
+                ready = warrior.can_attack()
             entry["ap"] = {
                 "percent": round(percent, 3),
                 "phase": phase,
-                "ready": bool(ready),
+                "ready": bool(ready),  # 可以挥刀（射程外也能挥，只是落空）
+                "inRange": bool(in_range),  # 这一刀能否真正命中
             }
             state[side] = entry
         return state

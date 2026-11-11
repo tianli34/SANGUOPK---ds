@@ -13,6 +13,7 @@ from src.constants import (
     TICK_RATE,
     UNIT_RADIUS,
     UNIT_SEPARATION,
+    WHIFF_SP_COST_RATIO,
 )
 from src.map import BattleMap, cell_at, cell_center, chebyshev_distance
 from src.warrior import Warrior
@@ -381,6 +382,11 @@ class BattleEngine:
             attacker.finish_backswing()
             return
 
+        # 射程外（或视线被挡）同样允许挥刀，但只是空挥：不进入攻防判定
+        if self.battle_map is not None and not self._can_reach(attacker, target):
+            self._process_whiff(attacker, target)
+            return
+
         # 进入攻击阶段
         attacker.start_attack()
 
@@ -492,6 +498,52 @@ class BattleEngine:
         )
 
         # 攻击完成，进入后摇阶段
+        attacker.finish_attack()
+        self.attack_count += 1
+
+    def _process_whiff(self, attacker: Warrior, target: Warrior) -> None:
+        """射程外挥刀：只结算自身出招消耗与后摇，不产生任何攻防判定
+
+        出手即消耗一次前摇并付出一份攻击体力，对手既不掉血也不进入防守选择，
+        空挥之后同样进入后摇（不可移动、不可出手），用来限制无脑乱挥。
+        """
+        attacker.start_attack()
+
+        attack_cost = attacker.attack_sp_cost() * WHIFF_SP_COST_RATIO
+        sp_before = attacker.sp
+        attacker.consume_sp(attack_cost)
+        actual_cost = sp_before - attacker.sp
+
+        attack_interval_ticks = self.tick_count - self.last_attack_tick.get(attacker.name, 0)
+        global_attack_interval_ticks = self.tick_count - self.last_any_attack_tick
+        self.last_attack_tick[attacker.name] = self.tick_count
+        self.last_any_attack_tick = self.tick_count
+
+        distance = chebyshev_distance(attacker.position, target.position)
+        out_of_range = distance > attacker.reach
+        reason = "range" if out_of_range else "los"
+        distance_text = (
+            f"{target.name} 尚在射程外（相距 {distance:.1f} 格，射程 {attacker.reach} 格）"
+            if out_of_range
+            else "视线被地形遮挡"
+        )
+        self._log(
+            "whiff",
+            f"{attacker.name} 挥刀落空：{distance_text}",
+            attacker=attacker.name,
+            defender=target.name,
+            out_of_range=out_of_range,
+            whiff_reason=reason,
+            attack_distance=distance,
+            attacker_reach=attacker.reach,
+            attacker_sp_before=sp_before,
+            attacker_sp_after=attacker.sp,
+            attacker_sp_cost=actual_cost,
+            attack_interval_ticks=attack_interval_ticks,
+            global_attack_interval_ticks=global_attack_interval_ticks,
+        )
+
+        # 空挥同样进入后摇
         attacker.finish_attack()
         self.attack_count += 1
 
@@ -809,24 +861,32 @@ class BattleEngine:
             if warrior.check_backswing_complete():
                 warrior.finish_backswing()
 
-        # 获取准备攻击的武将（前摇完成的），有地图时还需目标在射程内
+        # 获取前摇完成的武将：射程外也允许挥刀（落空），由 _process_single_attack 分流
         ready = [w for w in self._get_all_alive() if w.can_attack()]
+        ready = [w for w in ready if self._attack_allowed(w)]
+
+        # 拼刀只在真正能交手（双方射程内且视线通畅）的武将之间成立
+        clash_ready = ready
         if self.battle_map is not None:
-            ready = [
+            clash_ready = [
                 w
                 for w in ready
                 if (target := self._find_target(w)) is not None
                 and self._can_reach(w, target)
             ]
-        ready = [w for w in ready if self._attack_allowed(w)]
 
-        if len(ready) >= 2 and check_clash_condition(ready):
+        if len(clash_ready) >= 2 and check_clash_condition(clash_ready):
             # 拼刀！
-            self._process_clash(ready)
-            for warrior in ready:
+            self._process_clash(clash_ready)
+            for warrior in clash_ready:
                 self._clear_attack_intent(warrior)
+            # 同一 tick 内够不着的武将各自空挥
+            for attacker in [w for w in ready if w not in clash_ready]:
+                if attacker.is_alive:
+                    self._process_single_attack(attacker)
+                    self._clear_attack_intent(attacker)
         elif ready:
-            # 按顺序进行单个攻击
+            # 按顺序进行单个攻击（射程外的会落空）
             for attacker in ready:
                 if attacker.is_alive:
                     self._process_single_attack(attacker)

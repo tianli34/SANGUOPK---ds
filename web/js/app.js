@@ -20,6 +20,9 @@
 
   const TIER_CLASSES = ["tier-0", "tier-1", "tier-2", "tier-3"];
 
+  // 与 src/constants.py 的 TICK_RATE 保持一致：1 tick = 0.05 秒战斗时间
+  const CLOCK_TICK_SECONDS = 0.05;
+
   // file:// 直接打开时没有同源后端，尝试连接默认端口的本地服务
   const API_BASE =
     window.location.protocol === "file:" ? "http://127.0.0.1:8000/" : "";
@@ -43,6 +46,8 @@
     stage: $("stage"),
     roundLabel: $("round-label"),
     tickLabel: $("tick-label"),
+    battleClock: $("battle-clock"),
+    clockValue: $("clock-value"),
     actionRound: $("action-round"),
     actionText: $("action-text"),
     hpLead: $("hp-lead"),
@@ -378,6 +383,22 @@
           `<span class="def-result ${defense.success ? "is-success" : "is-fail"}">${defense.success ? "成功" : "失败"}</span>` +
           (fx.length ? `<span class="log-effects">${fx.join(" · ")}</span>` : "") +
           (dead.length ? `<span class="log-death">☠ ${dead.map(esc).join(" / ")} 阵亡</span>` : "");
+      } else if (ev.type === "whiff") {
+        li.className = "log-entry";
+        const info = ev.whiff || {};
+        const tags = ev.actor ? effectTags(ev, ev.actor.side) : "";
+        const reason = info.reason === "los" ? "视线受阻" : "射程外";
+        const range =
+          info.reason === "los" || info.distance == null
+            ? ""
+            : `距离 ${info.distance} / 射程 ${info.reach}`;
+        li.innerHTML =
+          `<span class="log-actor">${esc(ev.actor.name)}</span>挥刀落空 → ` +
+          `<span class="log-defender">${esc(ev.defender.name)}</span>` +
+          `<span class="def-result is-fail">${esc(reason)}</span>` +
+          (range || tags
+            ? `<span class="log-effects">${[range, tags].filter(Boolean).join(" · ")}</span>`
+            : "");
       } else if (ev.type === "clash") {
         li.className = "log-entry";
         const participants = (ev.clash && ev.clash.participants) || [];
@@ -458,12 +479,28 @@
     els.eventCounter.textContent = index < 0 ? `0 / ${total}` : `${index + 1} / ${total}`;
   }
 
+  function formatClock(seconds) {
+    const total = Math.max(0, Math.floor(seconds));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const rest = total % 60;
+    const pad = (value) => String(value).padStart(2, "0");
+    return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`;
+  }
+
+  function setBattleClock(battleSeconds) {
+    const text = formatClock(battleSeconds);
+    if (els.clockValue.textContent !== text) els.clockValue.textContent = text;
+  }
+
   function setRoundTick(ev, instant) {
     const round = ev && ev.round ? ev.round : 1;
     const tick = ev ? ev.tick : 0;
     els.roundLabel.textContent = `第 ${round} 回合`;
     els.tickLabel.textContent = `tick ${tick}`;
     els.actionRound.textContent = `第 ${round} 回合`;
+    // 实时操控下事件是批量补播的，计时器改由轮询到的引擎 tick 驱动，避免秒数来回跳
+    if (!Live.active) setBattleClock(tick * CLOCK_TICK_SECONDS);
     if (!instant && S.lastRound !== round) {
       els.roundLabel.classList.remove("pop");
       void els.roundLabel.offsetWidth;
@@ -480,6 +517,18 @@
         `${esc(ev.actor.name)}进攻 → ${esc(ev.defender.name)}` +
         `<span class="def-inline">${esc(defense.label || "")}</span>` +
         `<span class="${defense.success ? "def-ok" : "def-bad"}">${defense.success ? "成功" : "失败"}</span>`
+      );
+    }
+    if (ev.type === "whiff") {
+      const info = ev.whiff || {};
+      const why =
+        info.reason === "los"
+          ? "视线受阻"
+          : `射程外 ${info.distance} / ${info.reach}`;
+      return (
+        `${esc(ev.actor.name)}挥刀落空` +
+        `<span class="def-inline">${esc(ev.defender.name)}</span>` +
+        `<span class="def-bad">${esc(why)}</span>`
       );
     }
     if (ev.type === "clash") {
@@ -512,6 +561,7 @@
     els.btnReplay.disabled = Live.active;
     els.btnEnd.disabled = Live.active;
     els.progress.disabled = Live.active;
+    els.battleClock.classList.toggle("is-running", S.playing && !S.paused);
   }
 
   function showResult(ev) {
@@ -520,11 +570,12 @@
     const winner = battle.winnerSide;
     els.resultTitle.textContent = winner && S.warriors[winner] ? `${S.warriors[winner].name} 胜` : "平局";
     const seed = S.doc.meta && S.doc.meta.seed;
+    const finalTick = ev && typeof ev.tick === "number" ? ev.tick : battle.ticks;
     els.resultSub.textContent = `${
       battle.outcome === "timeout" ? "超时判定 · " : ""
-    }共 ${battle.rounds} 回合 · ${battle.ticks} tick${
-      seed === null || seed === undefined ? "" : ` · 种子 ${seed}`
-    }`;
+    }共 ${battle.rounds} 回合 · 用时 ${formatClock(finalTick * CLOCK_TICK_SECONDS)}（${
+      battle.ticks
+    } tick）${seed === null || seed === undefined ? "" : ` · 种子 ${seed}`}`;
     els.resultStats.innerHTML = ["A", "B"]
       .map((side) => {
         const warrior = S.warriors[side];
@@ -919,17 +970,30 @@
     ["A", "B"].forEach((side) => {
       const entry = Live.state[side];
       if (!entry || !entry.ap) return;
+      const ap = entry.ap;
+      const canSwing = Boolean(ap.ready);
+      const willLand = canSwing && ap.inRange !== false;
       const gauge = $("ap-gauge-" + side);
-      gauge.querySelector(".gauge-fill").style.width = `${(entry.ap.percent * 100).toFixed(1)}%`;
-      gauge.classList.toggle("is-ready", entry.ap.ready);
-      gauge.classList.toggle("is-backswing", entry.ap.phase === "backswing");
-      const label = entry.ap.ready ? "可攻击" : entry.ap.phase === "backswing" ? "收招" : "蓄力";
+      gauge.querySelector(".gauge-fill").style.width = `${(ap.percent * 100).toFixed(1)}%`;
+      gauge.classList.toggle("is-ready", willLand);
+      gauge.classList.toggle("is-backswing", ap.phase === "backswing");
+      const label =
+        ap.phase === "backswing"
+          ? "收招"
+          : !canSwing
+            ? "蓄力"
+            : ap.inRange === false
+              ? "射程外"
+              : "可攻击";
       $("ap-value-" + side).textContent = label;
-      gauge.title = entry.ap.ready
-        ? "可攻击：按 J 出手"
-        : entry.ap.phase === "backswing"
+      gauge.title =
+        ap.phase === "backswing"
           ? "后摇恢复中"
-          : "前摇蓄力中";
+          : !canSwing
+            ? "前摇蓄力中"
+            : ap.inRange === false
+              ? "可以挥刀，但对手在射程外（会落空）"
+              : "可攻击：按 J 出手";
     });
   }
 
@@ -937,19 +1001,19 @@
     const side = Live.activeSide;
     Live.attackPending[side] = true;
     const entry = Live.state && Live.state[side];
-    if (!entry || !entry.ap || entry.ap.ready) return;
-    const other = Live.state[side === "A" ? "B" : "A"];
-    const reach = (S.warriors[side].weapon && S.warriors[side].weapon.reach) || 1;
-    let dist = 0;
-    if (entry.position && other && other.position) {
-      dist = Math.max(
-        Math.abs(entry.position[0] - other.position[0]),
-        Math.abs(entry.position[1] - other.position[1])
-      );
+    if (!entry || !entry.ap) return;
+    if (entry.ap.phase === "backswing") {
+      S.scene.toast("收招中…", { side });
+      return;
     }
-    const text =
-      entry.ap.phase === "backswing" ? "收招中…" : dist > reach ? "射程外…" : "蓄力中…";
-    S.scene.toast(text, { side });
+    if (!entry.ap.ready) {
+      S.scene.toast("蓄力中…", { side });
+      return;
+    }
+    if (entry.ap.inRange === false) {
+      // 射程外同样能挥刀，只是砍空
+      S.scene.toast("射程外 · 挥刀落空", { side });
+    }
   }
 
   async function livePoll(token) {
@@ -980,6 +1044,7 @@
               Live.queue.push(...data.events);
             }
             Live.state = data.state;
+            if (typeof data.tick === "number") setBattleClock(data.tick * CLOCK_TICK_SECONDS);
             updateApGauges();
             if (data.finished) {
               Live.finished = true;

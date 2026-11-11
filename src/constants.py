@@ -23,6 +23,7 @@ BLOCK_K = 0.5  # 格挡冲击力系数
 
 # 体力消耗
 BASE_SP_COST = 5  # 基础体力消耗
+WHIFF_SP_COST_RATIO = 1.0  # 射程外空挥的体力消耗 = 攻击体力消耗 × 该比例
 
 # 胆气系统
 COURAGE_CAP = 120  # 胆气上限值
