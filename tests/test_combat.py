@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # 支持直接运行 python tests/test_combat.py
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -18,7 +19,6 @@ from src import (
     BattleOutcome,
     DefenseType,
     Warrior,
-    Weapon,
     WeaponCategory,
     calculate_base_damage,
     check_clash_condition,
@@ -111,6 +111,17 @@ class DefenseTest(unittest.TestCase):
                 self.assertGreaterEqual(rate, 0.05)
                 self.assertLessEqual(rate, 0.95)
 
+    def test_block_weight_reduced_against_spear(self):
+        # 守方格挡权重 70；若按守方武艺(50)算 x=0.5，权重 35 会选中格挡
+        defender = make_warrior("守", "A", martialarts=50)
+        spear = make_warrior("枪", "B", weapon=get_weapon("虎头湛金枪"))
+        heavy = make_warrior("刀", "B", weapon=get_weapon("血煞虎头刀"))
+
+        # 攻方武艺 90 时 x = 0.85 - 0.007×90 = 0.22，格挡权重降为 15.4
+        with patch("src.warrior.random.uniform", return_value=25.0):
+            self.assertIs(defender.choose_defense(heavy), DefenseType.BLOCK)
+            self.assertIs(defender.choose_defense(spear), DefenseType.PARRY)
+
     def test_ap_bonus_consumed_once_after_all_reads(self):
         """同一次攻击内多次读取 ap_percent 都应看到加成，结算只发生一次"""
         attacker = make_warrior("攻", "A", agility=120)
@@ -166,102 +177,6 @@ class WeaponTest(unittest.TestCase):
         self.assertEqual(snapshot.weapon_name, "虎头湛金枪")
         self.assertEqual(snapshot.weapon_category, 1)
         self.assertEqual(snapshot.weapon_category_label, "枪与矛（刺击类）")
-
-    def test_category_one_cannot_block(self):
-        spear = get_weapon("虎头湛金枪")
-        defender = make_warrior("马超", "A", weapon=spear)
-        attackers = [
-            make_warrior("无兵器", "B"),
-            make_warrior("许褚", "B", weapon=get_weapon("血煞虎头刀")),
-            make_warrior(
-                "刀客", "B", weapon=Weapon("测试长刀", WeaponCategory.GREAT_BLADE)
-            ),
-            make_warrior(
-                "戟客", "B", weapon=Weapon("测试戟", WeaponCategory.HALBERD)
-            ),
-        ]
-
-        for attacker in attackers:
-            self.assertFalse(defender.can_use_defense(DefenseType.BLOCK, attacker))
-            for _ in range(100):
-                self.assertIsNot(
-                    defender.choose_defense(attacker), DefenseType.BLOCK
-                )
-
-    def test_category_four_cannot_block_category_one_only(self):
-        heavy = get_weapon("血煞虎头刀")
-        defender = make_warrior("许褚", "B", weapon=heavy)
-        spear_attacker = make_warrior(
-            "马超", "A", weapon=get_weapon("虎头湛金枪")
-        )
-
-        self.assertFalse(
-            defender.can_use_defense(DefenseType.BLOCK, spear_attacker)
-        )
-        for _ in range(200):
-            self.assertIsNot(
-                defender.choose_defense(spear_attacker), DefenseType.BLOCK
-            )
-
-        for category in (
-            WeaponCategory.GREAT_BLADE,
-            WeaponCategory.HALBERD,
-            WeaponCategory.HEAVY,
-        ):
-            attacker = make_warrior("对手", "A", weapon=Weapon("测试兵器", category))
-            self.assertTrue(defender.can_use_defense(DefenseType.BLOCK, attacker))
-
-        blade_attacker = make_warrior(
-            "刀客", "A", weapon=Weapon("测试长刀", WeaponCategory.GREAT_BLADE)
-        )
-        choices = {
-            defender.choose_defense(blade_attacker) for _ in range(200)
-        }
-        self.assertIn(DefenseType.BLOCK, choices)
-
-    def test_warrior_without_weapon_is_unrestricted(self):
-        defender = make_warrior("无兵器", "A")
-        attacker = make_warrior(
-            "马超", "B", weapon=get_weapon("虎头湛金枪")
-        )
-
-        self.assertTrue(
-            defender.can_use_defense(DefenseType.BLOCK, attacker)
-        )
-
-    def test_battle_logs_respect_block_restrictions(self):
-        random.seed(42)
-        warrior_a = make_warrior(
-            "马超",
-            "A",
-            martialarts=98,
-            agility=95,
-            strength=92,
-            courage=94,
-            sp=98,
-            weapon=get_weapon("虎头湛金枪"),
-        )
-        warrior_b = make_warrior(
-            "许褚",
-            "B",
-            martialarts=95,
-            agility=80,
-            strength=99,
-            courage=96,
-            sp=100,
-            weapon=get_weapon("血煞虎头刀"),
-        )
-
-        result = BattleEngine([warrior_a], [warrior_b]).run()
-        attack_logs = [log for log in result.logs if log.event_type == "attack"]
-        self.assertTrue(attack_logs)
-
-        for log in attack_logs:
-            details = log.details
-            if details["defender"] == "马超":
-                self.assertNotEqual(details["defense"], "block")
-            if details["defender"] == "许褚" and details["attacker"] == "马超":
-                self.assertNotEqual(details["defense"], "block")
 
     def test_report_and_export_include_weapon(self):
         random.seed(7)
@@ -324,7 +239,7 @@ class WarriorPresetTest(unittest.TestCase):
         self.assertEqual(guan_yu.init_sp, 97)
         self.assertEqual(guan_yu.weapon.name, "青龙偃月刀")
         self.assertIs(guan_yu.weapon.category, WeaponCategory.GREAT_BLADE)
-        self.assertEqual(guan_yu.weapon.effective_reach, 2)
+        self.assertEqual(guan_yu.weapon.effective_reach, 1)
         self.assertEqual(guan_yu.skills, [])
 
 

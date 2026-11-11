@@ -16,9 +16,11 @@ from src.constants import (
     ATTACKER_BACKSWING_LOSS_RATIO,
     MOVE_SPEED_BASE,
     MOVE_CELL_PROGRESS,
+    SPEAR_BLOCK_WEIGHT_MA_FACTOR,
+    SPEAR_BLOCK_WEIGHT_BASE,
 )
 from src.enums import DefenseType, AttackPhase
-from src.weapons import UNARMED_REACH, is_defense_forbidden
+from src.weapons import UNARMED_REACH, WeaponCategory
 
 if TYPE_CHECKING:
     from src.skills import Skill
@@ -345,15 +347,8 @@ class Warrior:
         """在限制范围内修改胆气"""
         self.courage = max(1, min(COURAGE_CAP, self.courage + amount))
 
-    def can_use_defense(
-        self, defense_type: DefenseType, attacker: Optional["Warrior"] = None
-    ) -> bool:
-        """当前兵器对阵下是否允许使用某种防御方式"""
-        attacker_weapon = attacker.weapon if attacker is not None else None
-        return not is_defense_forbidden(self.weapon, attacker_weapon, defense_type)
-
     def choose_defense(self, attacker: Optional["Warrior"] = None) -> DefenseType:
-        """AI根据加权属性选择防御类型，并排除兵器规则禁止的防御方式"""
+        """AI根据加权属性选择防御类型"""
 
         weights = {
             DefenseType.BLOCK: self.strength * 0.6 + self.sp_percent * 100 * 0.4,
@@ -362,13 +357,18 @@ class Warrior:
             DefenseType.COUNTER: (self.courage * 0.7 + self.strength * 0.3) * (1 - self.hp_percent),
         }
 
-        weights = {
-            defense_type: weight
-            for defense_type, weight in weights.items()
-            if self.can_use_defense(defense_type, attacker)
-        }
-        if not weights:
-            return DefenseType.PARRY
+        # 防守 1 类兵器攻击时，攻方武艺越高，守方越避免硬接格挡
+        if (
+            attacker is not None
+            and attacker.weapon is not None
+            and attacker.weapon.category is WeaponCategory.SPEAR
+        ):
+            multiplier = max(
+                0.0,
+                SPEAR_BLOCK_WEIGHT_MA_FACTOR * attacker.martialarts
+                + SPEAR_BLOCK_WEIGHT_BASE,
+            )
+            weights[DefenseType.BLOCK] *= multiplier
 
         total = sum(weights.values())
         roll = random.uniform(0, total)
@@ -379,7 +379,7 @@ class Warrior:
             if roll <= cumulative:
                 return defense_type
 
-        return DefenseType.PARRY
+        return DefenseType.BLOCK
 
     def __repr__(self) -> str:
         return f"Warrior({self.name}, HP={self.hp:.0f}, SP={self.sp:.0f}, AP={self.ap:.0f})"

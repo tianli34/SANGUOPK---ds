@@ -76,3 +76,7 @@ DEFENSE_PARAMS = {
         "fail_damage_mult": 1.5,  # 失败伤害倍率
     },
 }
+
+# 防守 1 类兵器（枪与矛）攻击时的格挡权重系数：x = -0.007 × 攻方武艺 + 0.85
+SPEAR_BLOCK_WEIGHT_MA_FACTOR = -0.007
+SPEAR_BLOCK_WEIGHT_BASE = 0.85

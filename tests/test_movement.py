@@ -172,9 +172,9 @@ class PathfindingTest(unittest.TestCase):
 class ReachTest(unittest.TestCase):
     def test_category_defaults(self):
         for category, expected in (
-            (WeaponCategory.SPEAR, 3),
-            (WeaponCategory.GREAT_BLADE, 2),
-            (WeaponCategory.HALBERD, 2),
+            (WeaponCategory.SPEAR, 1),
+            (WeaponCategory.GREAT_BLADE, 1),
+            (WeaponCategory.HALBERD, 1),
             (WeaponCategory.HEAVY, 1),
         ):
             weapon = Weapon(name="测试兵器", category=category)
@@ -195,9 +195,9 @@ class ReachTest(unittest.TestCase):
         self.assertEqual(warrior.reach, 1)
         self.assertEqual(warrior.snapshot().reach, 1)
         spear_warrior = make_warrior(weapon=get_weapon("虎头湛金枪"))
-        self.assertEqual(spear_warrior.reach, 3)
+        self.assertEqual(spear_warrior.reach, 1)
         snapshot = spear_warrior.snapshot()
-        self.assertEqual(snapshot.reach, 3)
+        self.assertEqual(snapshot.reach, 1)
         self.assertIsNone(snapshot.position)
 
 
@@ -335,7 +335,7 @@ class ExportTest(unittest.TestCase):
         final_state = doc["events"][-1]["state"]
         self.assertEqual(final_state["A"]["position"], list(warrior_a.position))
         self.assertEqual(final_state["B"]["position"], list(warrior_b.position))
-        self.assertEqual(doc["warriors"]["A"]["weapon"]["reach"], 3)
+        self.assertEqual(doc["warriors"]["A"]["weapon"]["reach"], 1)
         self.assertEqual(doc["warriors"]["B"]["weapon"]["reach"], 1)
 
     def test_v1_legacy_document_unchanged(self):

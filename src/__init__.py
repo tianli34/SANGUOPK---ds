@@ -12,7 +12,6 @@ from src.weapons import (
     WeaponCategory,
     WEAPON_REGISTRY,
     get_weapon,
-    is_defense_forbidden,
     CATEGORY_DEFAULT_REACH,
     UNARMED_REACH,
 )
@@ -64,7 +63,6 @@ __all__ = [
     "WeaponCategory",
     "WEAPON_REGISTRY",
     "get_weapon",
-    "is_defense_forbidden",
     "CATEGORY_DEFAULT_REACH",
     "UNARMED_REACH",
     "BattleMap",

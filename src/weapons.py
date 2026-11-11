@@ -1,12 +1,10 @@
 # 文件名: weapons.py
-# 用途: 兵器分类系统，定义兵器类别、兵器注册表与兵器相关的攻防规则
+# 用途: 兵器分类系统，定义兵器类别与兵器注册表
 """兵器分类系统"""
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, FrozenSet, Optional, Tuple
-
-from src.enums import DefenseType
+from typing import Dict, Optional
 
 
 class WeaponCategory(Enum):
@@ -69,11 +67,11 @@ class Weapon:
         return f"{self.name} · {self.category_label}"
 
 
-# 类别默认射程（格）：枪矛=3 / 长柄刀=2 / 戟=2 / 重型=1
+# 类别默认射程（格）：枪矛=1 / 长柄刀=1 / 戟=1 / 重型=1
 CATEGORY_DEFAULT_REACH: Dict[WeaponCategory, int] = {
-    WeaponCategory.SPEAR: 3,
-    WeaponCategory.GREAT_BLADE: 2,
-    WeaponCategory.HALBERD: 2,
+    WeaponCategory.SPEAR: 1,
+    WeaponCategory.GREAT_BLADE: 1,
+    WeaponCategory.HALBERD: 1,
     WeaponCategory.HEAVY: 1,
 }
 
@@ -98,45 +96,3 @@ def get_weapon(name: str) -> Weapon:
         return WEAPON_REGISTRY[name]
     except KeyError:
         raise ValueError(f"未知兵器: {name}") from None
-
-
-# 防守方兵器类别 -> 无条件禁用的防御方式
-ALWAYS_FORBIDDEN_DEFENSES: Dict[WeaponCategory, FrozenSet[DefenseType]] = {
-    WeaponCategory.SPEAR: frozenset({DefenseType.BLOCK}),
-}
-
-# (防守方类别, 攻击方类别) -> 该对阵下禁用的防御方式
-MATCHUP_FORBIDDEN_DEFENSES: Dict[
-    Tuple[WeaponCategory, WeaponCategory], FrozenSet[DefenseType]
-] = {
-    (WeaponCategory.HEAVY, WeaponCategory.SPEAR): frozenset({DefenseType.BLOCK}),
-}
-
-
-def is_defense_forbidden(
-    defender_weapon: Optional[Weapon],
-    attacker_weapon: Optional[Weapon],
-    defense_type: DefenseType,
-) -> bool:
-    """判断当前兵器对阵是否禁用某种防御方式
-
-    规则：
-    - 1 类（枪与矛）不能格挡；
-    - 4 类（大斧与长柄锤）不能格挡 1 类的攻击。
-    未装备兵器的武将不受兵器规则限制。
-    """
-    if defender_weapon is None:
-        return False
-
-    forbidden = ALWAYS_FORBIDDEN_DEFENSES.get(defender_weapon.category)
-    if forbidden and defense_type in forbidden:
-        return True
-
-    if attacker_weapon is not None:
-        matchup = MATCHUP_FORBIDDEN_DEFENSES.get(
-            (defender_weapon.category, attacker_weapon.category)
-        )
-        if matchup and defense_type in matchup:
-            return True
-
-    return False
